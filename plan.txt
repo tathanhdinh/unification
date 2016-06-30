@@ -1,0 +1,4 @@
+Plan
++ setup a simple and fast pintool (all sophisticated analysis change to offline)
++ start a paper about Unification (maybe original paper of Robinson)
++ ...
