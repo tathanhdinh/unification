@@ -13,8 +13,8 @@ extern "C" {
 struct instruction_t
 {
   ADDRINT address;
-  ADDRINT next_addres;
-  unsigned int opcode_size;
+  ADDRINT next_address;
+  USIZE opcode_size;
   unsigned char* opcode_buffer;
   std::string memonic_string;
 
@@ -25,7 +25,7 @@ struct instruction_t
   bool is_memory_write;
   bool has_memory_read2;
   bool has_known_memory_size;
-  
+
   bool has_fall_through;
 
   instruction_t(const INS& ins);
@@ -35,7 +35,7 @@ struct instruction_t
 instruction_t::instruction_t(const INS& ins)
 {
   this->address = INS_Address(ins);
-  this->next_addres = INS_NextAddress(ins);
+  this->next_address = INS_NextAddress(ins);
 
   this->opcode_size = INS_Size(ins);
   this->opcode_buffer = new unsigned char[this->opcode_size];
@@ -59,7 +59,7 @@ instruction_t::instruction_t(const INS& ins)
   this->is_memory_write = INS_IsMemoryWrite(ins);
   this->has_memory_read2 = INS_HasMemoryRead2(ins);
   this->has_known_memory_size = INS_hasKnownMemorySize(ins);
-  
+
   this->has_fall_through = INS_HasFallThrough(ins);
 }
 
@@ -77,9 +77,67 @@ struct rt_instruction_t : public instruction_t
   THREADID thread_id;
 
   rt_instruction_t(const instruction_t& static_ins);
+  unsigned int serialized_length();
+  void serialize(unsigned char* buffer);
 };
 
-rt_instruction_t::rt_instruction_t(const instruction_t &static_ins) : instruction_t(static_ins) {}
+rt_instruction_t::rt_instruction_t(const instruction_t &static_ins) :
+  instruction_t(static_ins) {}
+
+static std::size_t length_of_register_map(const std::map<REG, PIN_REGISTER>& reg_map)
+{
+  std::size_t length = 0;
+  std::map<REG, PIN_REGISTER>::const_iterator reg_iter = reg_map.begin();
+  for (; reg_iter != reg_map.end(); ++reg_iter) {
+    REG reg = (*reg_iter).first;
+    std::string reg_name = REG_StringShort(reg);
+    length += sizeof(ADDRINT);      // for length of register's name
+    length += reg_name.length();    // for register's name
+    length += sizeof(PIN_REGISTER); // for PIN_REGISTER
+  }
+
+  return length;
+}
+
+static std::size_t length_of_memory_map(const std::map<ADDRINT, UINT8>& mem_map)
+{
+  std::size_t length = 0;
+  std::map<ADDRINT, UINT8>::const_iterator mem_iter = mem_map.begin();
+  for (; mem_iter != mem_map.end(); ++mem_iter) {
+    length += sizeof(ADDRINT); // for address;
+    length += sizeof(UINT8);   // for value
+  }
+
+  return length;
+}
+
+unsigned int rt_instruction_t::serialized_length()
+{
+  std::size_t group0_length =
+    sizeof(ADDRINT) +              // for address
+    sizeof(ADDRINT) +              // for next address
+    sizeof(ADDRINT) +              // for opcode buffer length
+    this->opcode_size +            // for opcode buffer
+    sizeof(ADDRINT) +              // for memonic string length
+    this->memonic_string.length(); // for memonic string
+
+  std::size_t group1_length = length_of_register_map(this->src_registers) +
+                              length_of_register_map(this->dst_registers);
+
+  std::size_t group2_length = 5 * sizeof(bool);
+
+  std::size_t group3_length = length_of_memory_map(this->load_mem_addresses) +
+                              length_of_memory_map(this->store_mem_addresses);
+
+  std::size_t group4_length = sizeof(THREADID);
+
+  return group0_length + group1_length + group2_length + group3_length + group4_length;
+}
+
+void rt_instruction_t::serialize(unsigned char *buffer)
+{
+  return;
+}
 // END: class runtime_instruction_t
 
 // BEGIN: static variables
