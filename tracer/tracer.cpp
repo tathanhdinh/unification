@@ -136,10 +136,12 @@ std::size_t rt_instruction_t::serialized_length()
 
 static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN_REGISTER>& reg_map)
 {
+  UINT8 *original_buffer_address = buffer;
   std::size_t serialized_length = 0;
   ADDRINT *p_reg_name_length;
   UINT8 *p_reg_name;
   PIN_REGISTER *p_reg_value;
+
   std::map<REG, PIN_REGISTER>::const_iterator reg_iter = reg_map.begin();
   for (; reg_iter != reg_map.end(); ++reg_iter) {
     REG reg = (*reg_iter).first;
@@ -147,7 +149,36 @@ static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN
     PIN_REGISTER reg_value = (*reg_iter).second;
 
     p_reg_name_length = reinterpret_cast<ADDRINT*>(buffer);
+    *p_reg_name_length = reg_name.length(); serialized_length += sizeof(ADDRINT);
 
+    p_reg_name = reinterpret_cast<UINT8*>(p_reg_name_length + 1);
+    std::memcpy(p_reg_name, reg_name.c_str(), reg_name.length()); serialized_length += reg_name.length();
+
+    p_reg_value = reinterpret_cast<PIN_REGISTER*>(p_reg_name + reg_name.length());
+    *p_reg_value = reg_value; serialized_length += sizeof(PIN_REGISTER);
+
+    buffer = original_buffer_address + serialized_length;
+  }
+
+  return serialized_length;
+}
+
+static std::size_t serialize_memory_map(UINT8* buffer, const std::map<ADDRINT, UINT8>& mem_map)
+{
+  UINT8 *original_buffer_address = buffer;
+  ADDRINT *p_mem_addr = 0;
+  UINT8 *p_mem_value = 0;
+  std::size_t serialized_length = 0;
+
+  std::map<ADDRINT, UINT8>::const_iterator mem_iter = mem_map.begin();
+  for (; mem_iter != mem_map.end(); ++mem_iter) {
+    p_mem_addr = reinterpret_cast<ADDRINT*>(buffer);
+    *p_mem_addr = (*mem_iter).first; serialized_length += sizeof(ADDRINT);
+
+    p_mem_value = reinterpret_cast<UINT8*>(p_mem_addr + 1);
+    *p_mem_value = (*mem_iter).second; serialized_length += sizeof(UINT8);
+
+    buffer = original_buffer_address + serialized_length;
   }
 
   return serialized_length;
@@ -155,16 +186,22 @@ static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN
 
 std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 {
+  UINT8 *original_buffer_addr = buffer;
   std::size_t serialized_length = 0;
+
   // group 0
+  buffer = original_buffer_addr + serialized_length;
   ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer);
-  *p_address = this->address; serialized_length += sizeof(ADDRINT);
+  *p_address = this->address;
+  serialized_length += sizeof(ADDRINT);
 
   ADDRINT *p_next_address = p_address + 1;
-  *p_next_address = this->next_address; serialized_length += sizeof(ADDRINT);
+  *p_next_address = this->next_address;
+  serialized_length += sizeof(ADDRINT);
 
   ADDRINT *p_opcode_size = p_next_address + 1;
-  *p_opcode_size = this->opcode_size; serialized_length += sizeof(ADDRINT);
+  *p_opcode_size = this->opcode_size;
+  serialized_length += sizeof(ADDRINT);
 
   UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1);
   std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
@@ -172,11 +209,23 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 
   ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size);
   *p_mnemonic_size = this->memonic_string.length();
+  serialized_length += sizeof(ADDRINT);
 
   UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1);
   std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
+  serialized_length += this->memonic_string.length();
 
   // group 1
+  buffer = original_buffer_addr + serialized_length;
+  serialized_length += serialize_register_map(buffer, this->src_registers);
+  buffer = original_buffer_addr + serialized_length;
+  serialized_length += serialize_register_map(buffer, this->dst_registers);
+
+  // group 2
+  buffer = original_buffer_addr + serialized_length;
+  serialized_length += serialize_memory_map(buffer, this->load_mem_addresses);
+  buffer = original_buffer_addr + serialized_length;
+  serialized_length += serialize_memory_map(buffer, this->store_mem_addresses);
 
   return serialized_length;
 }
