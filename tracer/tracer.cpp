@@ -3,7 +3,7 @@
 #include <iostream>
 #include <map>
 #include <vector>
-#include "picojson.h"
+#include <cstring>
 
 extern "C" {
 #include <xed-interface.h>
@@ -15,7 +15,7 @@ struct instruction_t
   ADDRINT address;
   ADDRINT next_address;
   USIZE opcode_size;
-  unsigned char* opcode_buffer;
+  UINT8* opcode_buffer;
   std::string memonic_string;
 
   std::map<REG, PIN_REGISTER> src_registers;
@@ -38,7 +38,7 @@ instruction_t::instruction_t(const INS& ins)
   this->next_address = INS_NextAddress(ins);
 
   this->opcode_size = INS_Size(ins);
-  this->opcode_buffer = new unsigned char[this->opcode_size];
+  this->opcode_buffer = new UINT8[this->opcode_size];
   PIN_SafeCopy(this->opcode_buffer, reinterpret_cast<VOID*>(this->address), this->opcode_size);
 
   this->memonic_string = INS_Disassemble(ins);
@@ -77,8 +77,8 @@ struct rt_instruction_t : public instruction_t
   THREADID thread_id;
 
   rt_instruction_t(const instruction_t& static_ins);
-  unsigned int serialized_length();
-  void serialize(unsigned char* buffer);
+  std::size_t serialized_length();
+  std::size_t serialize(UINT8* buffer);
 };
 
 rt_instruction_t::rt_instruction_t(const instruction_t &static_ins) :
@@ -111,7 +111,7 @@ static std::size_t length_of_memory_map(const std::map<ADDRINT, UINT8>& mem_map)
   return length;
 }
 
-unsigned int rt_instruction_t::serialized_length()
+std::size_t rt_instruction_t::serialized_length()
 {
   std::size_t group0_length =
     sizeof(ADDRINT) +              // for address
@@ -121,8 +121,8 @@ unsigned int rt_instruction_t::serialized_length()
     sizeof(ADDRINT) +              // for memonic string length
     this->memonic_string.length(); // for memonic string
 
-  std::size_t group1_length = length_of_register_map(this->src_registers) +
-                              length_of_register_map(this->dst_registers);
+  std::size_t group1_length = length_of_register_map(this->src_registers) + // for read registers
+                              length_of_register_map(this->dst_registers);  // for written registers
 
   std::size_t group2_length = 5 * sizeof(bool);
 
@@ -134,8 +134,36 @@ unsigned int rt_instruction_t::serialized_length()
   return group0_length + group1_length + group2_length + group3_length + group4_length;
 }
 
-void rt_instruction_t::serialize(unsigned char *buffer)
+static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN_REGISTER>& reg_map)
 {
+  std::size_t serialized_length = 0;
+  ADDRINT *p_reg_name_length;
+  UINT8 *p_reg_name;
+  PIN_REGISTER *p_reg_value;
+  std::map<REG, PIN_REGISTER>::const_iterator reg_iter = reg_map.begin();
+  for (; reg_iter != reg_map.end(); ++reg_iter) {
+    REG reg = (*reg_iter).first;
+    std::string reg_name = REG_StringShort(reg);
+    PIN_REGISTER reg_value = (*reg_iter).second;
+
+    p_reg_name_length = reinterpret_cast<ADDRINT*>(buffer);
+
+  }
+  return serialized_length;
+}
+
+std::size_t rt_instruction_t::serialize(UINT8 *buffer)
+{
+  // group 0
+  ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer); *p_address = this->address;
+  ADDRINT *p_next_address = p_address + 1; *p_next_address = this->next_address;
+  ADDRINT *p_opcode_size = p_next_address + 1; *p_opcode_size = this->opcode_size;
+  UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1); std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
+  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size); *p_mnemonic_size = this->memonic_string.length();
+  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1); std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
+
+  // group 1
+
   return;
 }
 // END: class runtime_instruction_t
