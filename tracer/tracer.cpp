@@ -1,6 +1,7 @@
 #include <pin.H>
 #include <string>
 #include <iostream>
+#include <fstream>
 #include <map>
 #include <vector>
 #include <cstring>
@@ -21,12 +22,12 @@ struct instruction_t
   std::map<REG, PIN_REGISTER> src_registers;
   std::map<REG, PIN_REGISTER> dst_registers;
 
-  bool is_memory_read;
-  bool is_memory_write;
-  bool has_memory_read2;
-  bool has_known_memory_size;
+  BOOL is_memory_read;
+  BOOL is_memory_write;
+  BOOL has_memory_read2;
+  BOOL has_known_memory_size;
 
-  bool has_fall_through;
+  BOOL has_fall_through;
 
   instruction_t(const INS& ins);
   virtual ~instruction_t();
@@ -124,14 +125,14 @@ std::size_t rt_instruction_t::serialized_length()
   std::size_t group1_length = length_of_register_map(this->src_registers) + // for read registers
                               length_of_register_map(this->dst_registers);  // for written registers
 
-  std::size_t group2_length = 5 * sizeof(bool);
+//  std::size_t group2_length = 5 * sizeof(bool); // not serialized
 
-  std::size_t group3_length = length_of_memory_map(this->load_mem_addresses) +
+  std::size_t group2_length = length_of_memory_map(this->load_mem_addresses) +
                               length_of_memory_map(this->store_mem_addresses);
 
-  std::size_t group4_length = sizeof(THREADID);
+  std::size_t group3_length = sizeof(THREADID);
 
-  return group0_length + group1_length + group2_length + group3_length + group4_length;
+  return group0_length + group1_length + group2_length + group3_length;
 }
 
 static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN_REGISTER>& reg_map)
@@ -227,6 +228,12 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   buffer = original_buffer_addr + serialized_length;
   serialized_length += serialize_memory_map(buffer, this->store_mem_addresses);
 
+  // group 3
+  buffer = original_buffer_addr + serialized_length;
+  THREADID *p_thread_id = reinterpret_cast<THREADID*>(buffer);
+  *p_thread_id = this->thread_id;
+  serialized_length += sizeof(THREADID);
+
   return serialized_length;
 }
 // END: class runtime_instruction_t
@@ -237,6 +244,8 @@ static KNOB<UINT32> trace_max_length_knob (KNOB_MODE_WRITEONCE, "pintool", "leng
 
 UINT32 max_trace_length = 0;
 UINT32 current_trace_length = 0;
+
+std::ofstream output_file;
 
 std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
 std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
@@ -254,7 +263,7 @@ std::string get_binary_name(int argc, char* argv[])
 }
 
 
-static VOID initialize_cached_instruction(ADDRINT ins_addr, THREADID thread_id)
+static VOID initialize_cached_instruction(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
 {
   if (current_instruction_at_thread[thread_id] != 0) {
     // save instruction
@@ -329,6 +338,14 @@ static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size,
 
 static VOID serialize_threaded_instruction(THREADID thread_id)
 {
+  std::size_t serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
+  UINT8 *buffer = new UINT8[serialized_length];
+  current_instruction_at_thread[thread_id]->serialize(buffer);
+  output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
+  delete [] buffer;
+
+  // reset serialized instruction
+  current_instruction_at_thread[thread_id] = 0;
 
   return;
 }
@@ -343,7 +360,7 @@ static VOID inject_callbacks(const INS& ins)
   static instruction_t *instrumented_instruction = cached_instruction_at_address[ins_addr];
 
   INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(initialize_cached_instruction),
-                 IARG_INST_PTR, IARG_THREAD_ID, IARG_END);
+                 IARG_INST_PTR, IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
 
   if (!instrumented_instruction->src_registers.empty()) {
     INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_read_registers_callback),
@@ -376,6 +393,14 @@ static VOID inject_callbacks(const INS& ins)
     INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction),
                    IARG_THREAD_ID, IARG_END);
   }
+  else {
+    // we cannot use IPOINT_AFTER for instructions having no "fall through", so use IPOINT_BEFORE just to
+    // specify which data should be captured
+    if (instrumented_instruction->is_memory_read) {
+      INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
+                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
+    }
+  }
 
   return;
 }
@@ -403,6 +428,8 @@ static VOID finalize(INT32 code, VOID *data)
   }
   cached_instruction_at_address.clear();
 
+  output_file.close();
+
   return;
 }
 
@@ -420,6 +447,20 @@ int main(int argc, char *argv[])
   if (max_trace_length == 0) std::cout << " (nolimit)";
   std::cout << std::endl
             << "output file: " << output_file_knob.Value() << std::endl;
+
+  output_file.open(output_file_knob.Value().c_str(),
+                   std::ofstream::trunc | std::ofstream::binary);
+  if (!output_file) {
+    std::cout << "cannot open output file, stop tracing." << std::endl;
+    return 1;
+  }
+  // specify size of ADDRINT, BOOL and THREADID
+  UINT8 basic_size = sizeof(ADDRINT);
+  output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
+  basic_size = sizeof(BOOL);
+  output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
+  basic_size = sizeof(THREADID);
+  output_file.write(reinterpret_cast<char*>(basic_size), sizeof(UINT8));
 
   TRACE_AddInstrumentFunction(instrument_trace, 0);
   PIN_AddFiniFunction(finalize, 0);
