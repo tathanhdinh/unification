@@ -149,22 +149,36 @@ static std::size_t serialize_register_map(UINT8* buffer, const std::map<REG, PIN
     p_reg_name_length = reinterpret_cast<ADDRINT*>(buffer);
 
   }
+
   return serialized_length;
 }
 
 std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 {
+  std::size_t serialized_length = 0;
   // group 0
-  ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer); *p_address = this->address;
-  ADDRINT *p_next_address = p_address + 1; *p_next_address = this->next_address;
-  ADDRINT *p_opcode_size = p_next_address + 1; *p_opcode_size = this->opcode_size;
-  UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1); std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
-  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size); *p_mnemonic_size = this->memonic_string.length();
-  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1); std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
+  ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer);
+  *p_address = this->address; serialized_length += sizeof(ADDRINT);
+
+  ADDRINT *p_next_address = p_address + 1;
+  *p_next_address = this->next_address; serialized_length += sizeof(ADDRINT);
+
+  ADDRINT *p_opcode_size = p_next_address + 1;
+  *p_opcode_size = this->opcode_size; serialized_length += sizeof(ADDRINT);
+
+  UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1);
+  std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
+  serialized_length += this->opcode_size;
+
+  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size);
+  *p_mnemonic_size = this->memonic_string.length();
+
+  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1);
+  std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
 
   // group 1
 
-  return;
+  return serialized_length;
 }
 // END: class runtime_instruction_t
 
