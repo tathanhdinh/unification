@@ -242,13 +242,13 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 static KNOB<string> output_file_knob      (KNOB_MODE_WRITEONCE, "pintool", "out", "output.trace", "output trace file");
 static KNOB<UINT32> trace_max_length_knob (KNOB_MODE_WRITEONCE, "pintool", "length", "0", "limit length of trace (0 = no limit)");
 
-UINT32 max_trace_length = 0;
-UINT32 current_trace_length = 0;
+static UINT32 max_trace_length = 0;
+static UINT32 current_trace_length = 0;
 
-std::ofstream output_file;
+static std::ofstream output_file;
 
-std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
-std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
+static std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
+static std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
 
 // END: static variables
 
@@ -257,23 +257,48 @@ std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
  */
 std::string get_binary_name(int argc, char* argv[])
 {
+  static_cast<void>(argc);
+
   unsigned int i = 0;
   while(std::string(argv[i]) != "--") { i++; };
   return std::string(argv[i + 1]);
 }
 
+// declare callback functions
+static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id);
 
-static VOID initialize_cached_instruction(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
+static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thread_id);
+
+static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID thread_id);
+
+static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id);
+
+static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size, THREADID thread_id);
+
+static VOID serialize_threaded_instruction_callback(THREADID thread_id);
+
+// implement callback functions
+static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
 {
   if (current_instruction_at_thread[thread_id] != 0) {
-    // save instruction
+    // this instruction is not reset yet (because it has no "fall through") then
+    // we need some extract information and serialize it
+    save_written_registers_callback(p_context, thread_id);
+
+    std::map<ADDRINT, UINT8>::iterator mem_iter = current_instruction_at_thread[thread_id]->store_mem_addresses.begin();
+    for (; mem_iter != current_instruction_at_thread[thread_id]->store_mem_addresses.end(); ++mem_iter) {
+      static UINT8 byte_value;
+      PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_iter->first), sizeof(UINT8));
+      mem_iter->second = byte_value;
+    }
+
+    serialize_threaded_instruction_callback(thread_id); // the instruction will be reset after serialized
   }
 
   current_instruction_at_thread[thread_id] = new rt_instruction_t(*cached_instruction_at_address[ins_addr]);
   current_instruction_at_thread[thread_id]->thread_id = thread_id;
   return;
 }
-
 
 static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thread_id)
 {
@@ -288,12 +313,12 @@ static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thre
   return;
 }
 
-
 static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID thread_id)
 {
   rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
-  for (std::map<REG, PIN_REGISTER>::iterator reg_iter = runtime_ins->dst_registers.begin();
-       reg_iter != runtime_ins->dst_registers.end(); ++reg_iter) {
+
+  std::map<REG, PIN_REGISTER>::const_iterator reg_iter = runtime_ins->dst_registers.begin();
+  for (; reg_iter != runtime_ins->dst_registers.end(); ++reg_iter) {
     static PIN_REGISTER reg_value;
     PIN_GetContextRegval(p_context, (*reg_iter).first, reinterpret_cast<UINT8*>(&reg_value));
     runtime_ins->dst_registers[(*reg_iter).first] = reg_value;
@@ -301,7 +326,6 @@ static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID t
 
   return;
 }
-
 
 static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id)
 {
@@ -316,32 +340,26 @@ static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THR
   return;
 }
 
-
 static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size, THREADID thread_id)
 {
   rt_instruction_t *runtime_ins = current_instruction_at_thread[thread_id];
   ADDRINT upper_addr = stored_addr + stored_size;
   for (ADDRINT mem_addr = stored_addr; mem_addr < upper_addr; ++mem_addr) {
     static UINT8 byte_value;
-    PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_addr), 1);
+    PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_addr), sizeof(UINT8));
     runtime_ins->store_mem_addresses[mem_addr] = byte_value;
   }
 
   return;
 }
 
-
-//static VOID serialize_instruction(rt_instruction_t *runtime_ins)
-//{
-//  return;
-//}
-
-static VOID serialize_threaded_instruction(THREADID thread_id)
+static VOID serialize_threaded_instruction_callback(THREADID thread_id)
 {
   std::size_t serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
   UINT8 *buffer = new UINT8[serialized_length];
   current_instruction_at_thread[thread_id]->serialize(buffer);
   output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
+  current_trace_length++;
   delete [] buffer;
 
   // reset serialized instruction
@@ -350,18 +368,20 @@ static VOID serialize_threaded_instruction(THREADID thread_id)
   return;
 }
 
-
 static VOID inject_callbacks(const INS& ins)
 {
+  // add instruction statically into a map, so we do not need to re-examine it
   ADDRINT ins_addr = INS_Address(ins);
   if (cached_instruction_at_address.find(ins_addr) == cached_instruction_at_address.end()) {
     cached_instruction_at_address[ins_addr] = new instruction_t(ins);
   }
   static instruction_t *instrumented_instruction = cached_instruction_at_address[ins_addr];
 
-  INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(initialize_cached_instruction),
+  // insert callback functions for this instruction
+  INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(initialize_cached_instruction_callback),
                  IARG_INST_PTR, IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
 
+  // these callbacks are inserted "before"
   if (!instrumented_instruction->src_registers.empty()) {
     INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_read_registers_callback),
                    IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
@@ -390,13 +410,13 @@ static VOID inject_callbacks(const INS& ins)
     }
 
     // so we can save it into trace when all needed information has been captured
-    INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction),
+    INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction_callback),
                    IARG_THREAD_ID, IARG_END);
   }
   else {
     // we cannot use IPOINT_AFTER for instructions having no "fall through", so use IPOINT_BEFORE just to
     // specify which data should be captured
-    if (instrumented_instruction->is_memory_read) {
+    if (instrumented_instruction->is_memory_write) {
       INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
                      IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
     }
@@ -422,8 +442,8 @@ static VOID finalize(INT32 code, VOID *data)
   static_cast<void>(code); static_cast<void>(data);
 
   // clean cached instructions
-  for (std::map<ADDRINT, instruction_t*>::iterator addr_ins_iter = cached_instruction_at_address.begin();
-       addr_ins_iter != cached_instruction_at_address.end(); ++addr_ins_iter) {
+  std::map<ADDRINT, instruction_t*>::iterator addr_ins_iter = cached_instruction_at_address.begin();
+  for (; addr_ins_iter != cached_instruction_at_address.end(); ++addr_ins_iter) {
     delete (*addr_ins_iter).second;
   }
   cached_instruction_at_address.clear();
