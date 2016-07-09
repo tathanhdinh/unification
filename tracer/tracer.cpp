@@ -251,8 +251,8 @@ static std::ofstream output_file;
 static std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
 static std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
 
-std::time_t start_time;
-std::time_t stop_time;
+static std::time_t start_time;
+static std::time_t stop_time;
 // END: static variables
 
 // BEGIN: declare callback functions
@@ -292,7 +292,7 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
       save_written_registers_callback(p_context, thread_id);
     }
 
-    if (!current_instruction_at_thread[thread_id]->is_memory_write) {
+    if (current_instruction_at_thread[thread_id]->is_memory_write) {
       std::map<ADDRINT, UINT8>::iterator mem_iter = current_instruction_at_thread[thread_id]->store_mem_addresses.begin();
       for (; mem_iter != current_instruction_at_thread[thread_id]->store_mem_addresses.end(); ++mem_iter) {
         static UINT8 byte_value;
@@ -364,7 +364,11 @@ static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size,
 
 static VOID serialize_threaded_instruction_callback(THREADID thread_id)
 {
-  std::size_t serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
+  ADDRINT serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
+
+  // serialize size of serialized instruction: allow random access on the serialized trace
+  output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
+
   UINT8 *buffer = new UINT8[serialized_length];
   current_instruction_at_thread[thread_id]->serialize(buffer);
   output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
@@ -373,7 +377,7 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
   // reset serialized instruction
   current_instruction_at_thread[thread_id] = 0;
 
-  // compare with maximal length (0 = nolimit)
+  // compare with maximal length (0 = no limit)
   current_trace_length++;
   if (current_trace_length >= max_trace_length && max_trace_length != 0) {
     PIN_ExitApplication(1);
@@ -469,7 +473,8 @@ static VOID finalize(INT32 code, VOID *data)
 
   output_file.close();
 
-  std::cout << current_trace_length << " instruction captured" << std::endl;
+  std::cout << std::endl << "stop tracing" << std::endl
+            << current_trace_length << " instruction captured" << std::endl;
 
   time(&stop_time);
   std::cout << std::difftime(stop_time, start_time) << " seconds elapsed." << std::endl;
@@ -488,7 +493,7 @@ int main(int argc, char *argv[])
 
   std::cout << "start tracing program: " << get_binary_name(argc, argv) << std::endl
             << "limit length: " << max_trace_length;
-  if (max_trace_length == 0) std::cout << " (nolimit)";
+  if (max_trace_length == 0) std::cout << " (no limit)";
   std::cout << std::endl
             << "output file: " << output_file_knob.Value() << std::endl;
 
@@ -499,6 +504,7 @@ int main(int argc, char *argv[])
     return 1;
   }
 
+  std::cout << "start tracing..." << std::endl;
   std::time(&start_time);
 
   // specify size of ADDRINT, BOOL and THREADID
