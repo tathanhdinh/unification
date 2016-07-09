@@ -5,6 +5,7 @@
 #include <map>
 #include <vector>
 #include <cstring>
+#include <ctime>
 
 extern "C" {
 #include <xed-interface.h>
@@ -250,7 +251,23 @@ static std::ofstream output_file;
 static std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
 static std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
 
+std::time_t start_time;
+std::time_t stop_time;
 // END: static variables
+
+// BEGIN: declare callback functions
+static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id);
+
+static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thread_id);
+
+static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID thread_id);
+
+static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id);
+
+static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size, THREADID thread_id);
+
+static VOID serialize_threaded_instruction_callback(THREADID thread_id);
+// END: declare callback functions
 
 /*
  * extract the name of the traced binary from the command line
@@ -264,18 +281,6 @@ std::string get_binary_name(int argc, char* argv[])
   return std::string(argv[i + 1]);
 }
 
-// declare callback functions
-static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id);
-
-static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thread_id);
-
-static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID thread_id);
-
-static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id);
-
-static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size, THREADID thread_id);
-
-static VOID serialize_threaded_instruction_callback(THREADID thread_id);
 
 // implement callback functions
 static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
@@ -283,13 +288,17 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
   if (current_instruction_at_thread[thread_id] != 0) {
     // this instruction is not reset yet (because it has no "fall through") then
     // we need some extract information and serialize it
-    save_written_registers_callback(p_context, thread_id);
+    if (!current_instruction_at_thread[thread_id]->dst_registers.empty()) {
+      save_written_registers_callback(p_context, thread_id);
+    }
 
-    std::map<ADDRINT, UINT8>::iterator mem_iter = current_instruction_at_thread[thread_id]->store_mem_addresses.begin();
-    for (; mem_iter != current_instruction_at_thread[thread_id]->store_mem_addresses.end(); ++mem_iter) {
-      static UINT8 byte_value;
-      PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_iter->first), sizeof(UINT8));
-      mem_iter->second = byte_value;
+    if (!current_instruction_at_thread[thread_id]->is_memory_write) {
+      std::map<ADDRINT, UINT8>::iterator mem_iter = current_instruction_at_thread[thread_id]->store_mem_addresses.begin();
+      for (; mem_iter != current_instruction_at_thread[thread_id]->store_mem_addresses.end(); ++mem_iter) {
+        static UINT8 byte_value;
+        PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_iter->first), sizeof(UINT8));
+        mem_iter->second = byte_value;
+      }
     }
 
     serialize_threaded_instruction_callback(thread_id); // the instruction will be reset after serialized
@@ -359,11 +368,16 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
   UINT8 *buffer = new UINT8[serialized_length];
   current_instruction_at_thread[thread_id]->serialize(buffer);
   output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
-  current_trace_length++;
   delete [] buffer;
 
   // reset serialized instruction
   current_instruction_at_thread[thread_id] = 0;
+
+  // compare with maximal length (0 = nolimit)
+  current_trace_length++;
+  if (current_trace_length >= max_trace_length && max_trace_length != 0) {
+    PIN_ExitApplication(1);
+  }
 
   return;
 }
@@ -397,30 +411,35 @@ static VOID inject_callbacks(const INS& ins)
                    IARG_MEMORYREAD2_EA, IARG_MEMORYREAD_SIZE, IARG_THREAD_ID, IARG_END);
   }
 
-  // if the instruction has fall through then we can insert an "after execution" callback
-  if (instrumented_instruction->has_fall_through) {
-    if (instrumented_instruction->dst_registers.empty()) {
-        INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_written_registers_callback),
-                       IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
-    }
-
-    if (instrumented_instruction->is_memory_write) {
-      INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
-                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
-    }
-
-    // so we can save it into trace when all needed information has been captured
-    INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction_callback),
-                   IARG_THREAD_ID, IARG_END);
+  if (instrumented_instruction->is_memory_write) {
+    INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
+                   IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
   }
-  else {
-    // we cannot use IPOINT_AFTER for instructions having no "fall through", so use IPOINT_BEFORE just to
-    // specify which data should be captured
-    if (instrumented_instruction->is_memory_write) {
-      INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
-                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
-    }
-  }
+
+//  // if the instruction has fall through then we can insert an "after execution" callback
+//  if (!instrumented_instruction->has_fall_through) {
+//    if (!instrumented_instruction->dst_registers.empty()) {
+//        INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_written_registers_callback),
+//                       IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
+//    }
+
+//    if (instrumented_instruction->is_memory_write) {
+//      INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
+//                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
+//    }
+//    // so we can save it into trace when all needed information has been captured
+//    INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction_callback),
+//                   IARG_THREAD_ID, IARG_END);
+
+//  }
+//  else {
+//    // we cannot use IPOINT_AFTER for instructions having no "fall through", so use IPOINT_BEFORE just to
+//    // specify which data should be captured
+//    if (instrumented_instruction->is_memory_write) {
+//      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
+//                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
+//    }
+//  }
 
   return;
 }
@@ -450,6 +469,11 @@ static VOID finalize(INT32 code, VOID *data)
 
   output_file.close();
 
+  std::cout << current_trace_length << " instruction captured" << std::endl;
+
+  time(&stop_time);
+  std::cout << std::difftime(stop_time, start_time) << " seconds elapsed." << std::endl;
+
   return;
 }
 
@@ -474,13 +498,16 @@ int main(int argc, char *argv[])
     std::cout << "cannot open output file, stop tracing." << std::endl;
     return 1;
   }
+
+  std::time(&start_time);
+
   // specify size of ADDRINT, BOOL and THREADID
   UINT8 basic_size = sizeof(ADDRINT);
   output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
   basic_size = sizeof(BOOL);
   output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
   basic_size = sizeof(THREADID);
-  output_file.write(reinterpret_cast<char*>(basic_size), sizeof(UINT8));
+  output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
 
   TRACE_AddInstrumentFunction(instrument_trace, 0);
   PIN_AddFiniFunction(finalize, 0);
