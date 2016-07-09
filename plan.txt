@@ -1,4 +1,4 @@
 Plan
 + setup a simple and fast tracer (move all sophisticated analysis to offline)
-+ start a paper about Unification (maybe original paper of Robinson)
++ start a paper about Unification (maybe Robinson's original papers)
 + ...
