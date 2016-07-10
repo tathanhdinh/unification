@@ -97,6 +97,7 @@ static std::size_t length_of_register_map(const std::map<REG, PIN_REGISTER>& reg
     length += reg_name.length();    // for register's name
     length += sizeof(PIN_REGISTER); // for PIN_REGISTER
   }
+//  std::cout << "in length: " << length << std::endl;
 
   return length;
 }
@@ -123,13 +124,13 @@ std::size_t rt_instruction_t::serialized_length()
     sizeof(ADDRINT) +              // for memonic string length
     this->memonic_string.length(); // for memonic string
 
-  std::size_t group1_length = length_of_register_map(this->src_registers) + // for read registers
-                              length_of_register_map(this->dst_registers);  // for written registers
+  std::size_t group1_length = sizeof(ADDRINT) + length_of_register_map(this->src_registers) + // for read registers
+                              sizeof(ADDRINT) + length_of_register_map(this->dst_registers);  // for written registers
 
 //  std::size_t group2_length = 5 * sizeof(bool); // not serialized
 
-  std::size_t group2_length = length_of_memory_map(this->load_mem_addresses) +
-                              length_of_memory_map(this->store_mem_addresses);
+  std::size_t group2_length = sizeof(ADDRINT) + length_of_memory_map(this->load_mem_addresses) + // for load memory addresses
+                              sizeof(ADDRINT) + length_of_memory_map(this->store_mem_addresses); // for stored memory addreses
 
   std::size_t group3_length = sizeof(THREADID);
 
@@ -212,6 +213,7 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size);
   *p_mnemonic_size = this->memonic_string.length();
   serialized_length += sizeof(ADDRINT);
+//  std::cout << "mnemonic size: " << *p_mnemonic_size << std::endl;
 
   UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1);
   std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
@@ -219,15 +221,45 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 
   // group 1
   buffer = original_buffer_addr + serialized_length;
-  serialized_length += serialize_register_map(buffer, this->src_registers);
+  ADDRINT *p_src_reg_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  *p_src_reg_map_length = length_of_register_map(this->src_registers);
+//  std::cout << "read register map length (before): " << *p_src_reg_map_length << std::endl;
+  serialized_length += sizeof(ADDRINT);
+
+  UINT8 *p_src_reg_map = reinterpret_cast<UINT8*>(p_src_reg_map_length + 1);
+  serialize_register_map(p_src_reg_map, this->src_registers);
+  serialized_length += *p_src_reg_map_length;
+//  std::cout << "read register map length (after): " << *p_src_reg_map_length << std::endl;
+
   buffer = original_buffer_addr + serialized_length;
-  serialized_length += serialize_register_map(buffer, this->dst_registers);
+  ADDRINT *p_dst_reg_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  *p_dst_reg_map_length = length_of_register_map(this->dst_registers);
+//  std::cout << "written register map length: " << *p_dst_reg_map_length << std::endl;
+  serialized_length += sizeof(ADDRINT);
+
+  UINT8 *p_dst_reg_map = reinterpret_cast<UINT8*>(p_dst_reg_map_length + 1);
+  serialize_register_map(p_dst_reg_map, this->dst_registers);
+  serialized_length += *p_dst_reg_map_length;
+
 
   // group 2
   buffer = original_buffer_addr + serialized_length;
-  serialized_length += serialize_memory_map(buffer, this->load_mem_addresses);
+  ADDRINT *p_load_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  *p_load_mem_map_length = length_of_memory_map(this->load_mem_addresses);
+  serialized_length += sizeof(ADDRINT);
+
+  UINT8 *p_load_mem_map = reinterpret_cast<UINT8*>(p_load_mem_map_length + 1);
+  serialize_memory_map(p_load_mem_map, this->load_mem_addresses);
+  serialized_length += *p_load_mem_map_length;
+
   buffer = original_buffer_addr + serialized_length;
-  serialized_length += serialize_memory_map(buffer, this->store_mem_addresses);
+  ADDRINT *p_store_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  *p_store_mem_map_length = length_of_memory_map(this->store_mem_addresses);
+  serialized_length += sizeof(ADDRINT);
+
+  UINT8 *p_store_mem_map = reinterpret_cast<UINT8*>(p_store_mem_map_length + 1);
+  serialize_memory_map(p_store_mem_map, this->store_mem_addresses);
+  serialized_length += *p_store_mem_map_length;
 
   // group 3
   buffer = original_buffer_addr + serialized_length;
