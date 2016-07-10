@@ -14,4 +14,10 @@ Global
 		{1D8315DF-68ED-43E3-B8CF-5319BB1D56AD}.Release|x86.ActiveCfg = Release|x86
 		{1D8315DF-68ED-43E3-B8CF-5319BB1D56AD}.Release|x86.Build.0 = Release|x86
 	EndGlobalSection
+	GlobalSection(MonoDevelopProperties) = preSolution
+		Policies = $0
+		$0.DotNetNamingPolicy = $1
+		$1.DirectoryNamespaceAssociation = None
+		$1.ResourceNamePolicy = FileFormatDefault
+	EndGlobalSection
 EndGlobal
