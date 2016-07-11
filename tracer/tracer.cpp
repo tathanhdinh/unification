@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstring>
 #include <ctime>
+#include <cassert>
 
 extern "C" {
 #include <xed-interface.h>
@@ -18,7 +19,7 @@ struct instruction_t
   ADDRINT next_address;
   USIZE opcode_size;
   UINT8* opcode_buffer;
-  std::string memonic_string;
+  std::string mnemonic_string;
 
   std::map<REG, PIN_REGISTER> src_registers;
   std::map<REG, PIN_REGISTER> dst_registers;
@@ -43,7 +44,7 @@ instruction_t::instruction_t(const INS& ins)
   this->opcode_buffer = new UINT8[this->opcode_size];
   PIN_SafeCopy(this->opcode_buffer, reinterpret_cast<VOID*>(this->address), this->opcode_size);
 
-  this->memonic_string = INS_Disassemble(ins);
+  this->mnemonic_string = INS_Disassemble(ins);
 
   // accessed registers can be obtained statically
   PIN_REGISTER default_reg_value;
@@ -57,7 +58,9 @@ instruction_t::instruction_t(const INS& ins)
     this->dst_registers[INS_RegW(ins, reg_id)] = default_reg_value;
   }
 
+//  std::cout << this->memonic_string << std::endl;
   this->is_memory_read = INS_IsMemoryRead(ins);
+//  if (this->is_memory_read) std::cout << "is memory read\n"; else std::cout << "is not memory read\n";
   this->is_memory_write = INS_IsMemoryWrite(ins);
   this->has_memory_read2 = INS_HasMemoryRead2(ins);
   this->has_known_memory_size = INS_hasKnownMemorySize(ins);
@@ -122,7 +125,7 @@ std::size_t rt_instruction_t::serialized_length()
     sizeof(ADDRINT) +              // for opcode buffer length
     this->opcode_size +            // for opcode buffer
     sizeof(ADDRINT) +              // for memonic string length
-    this->memonic_string.length(); // for memonic string
+    this->mnemonic_string.length(); // for mnemonic string
 
   std::size_t group1_length = sizeof(ADDRINT) + length_of_register_map(this->src_registers) + // for read registers
                               sizeof(ADDRINT) + length_of_register_map(this->dst_registers);  // for written registers
@@ -192,52 +195,54 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   UINT8 *original_buffer_addr = buffer;
   std::size_t serialized_length = 0;
 
+//  std::cout << this->mnemonic_string << std::endl;
+
   // group 0
   buffer = original_buffer_addr + serialized_length;
-  ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer);
+  ADDRINT *p_address = reinterpret_cast<ADDRINT*>(buffer); // address
   *p_address = this->address;
   serialized_length += sizeof(ADDRINT);
 
-  ADDRINT *p_next_address = p_address + 1;
+  ADDRINT *p_next_address = p_address + 1; // next address
   *p_next_address = this->next_address;
   serialized_length += sizeof(ADDRINT);
 
-  ADDRINT *p_opcode_size = p_next_address + 1;
+  ADDRINT *p_opcode_size = p_next_address + 1; // opcode size
   *p_opcode_size = this->opcode_size;
   serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1);
+  UINT8 *p_opcode = reinterpret_cast<UINT8*>(p_opcode_size + 1); // opcode buffer
   std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
   serialized_length += this->opcode_size;
 
-  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size);
-  *p_mnemonic_size = this->memonic_string.length();
+  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size); // mnemonic size
+  *p_mnemonic_size = this->mnemonic_string.length();
   serialized_length += sizeof(ADDRINT);
 //  std::cout << "mnemonic size: " << *p_mnemonic_size << std::endl;
 
-  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1);
-  std::memcpy(p_mnemonic, this->memonic_string.c_str(), this->memonic_string.length());
-  serialized_length += this->memonic_string.length();
+  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1); // mnemonic buffer
+  std::memcpy(p_mnemonic, this->mnemonic_string.c_str(), this->mnemonic_string.length());
+  serialized_length += this->mnemonic_string.length();
 
   // group 1
   buffer = original_buffer_addr + serialized_length;
-  ADDRINT *p_src_reg_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  ADDRINT *p_src_reg_map_length = reinterpret_cast<ADDRINT*>(buffer); // read register map length
   *p_src_reg_map_length = length_of_register_map(this->src_registers);
 //  std::cout << "read register map length (before): " << *p_src_reg_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_src_reg_map = reinterpret_cast<UINT8*>(p_src_reg_map_length + 1);
+  UINT8 *p_src_reg_map = reinterpret_cast<UINT8*>(p_src_reg_map_length + 1); // read register map
   serialize_register_map(p_src_reg_map, this->src_registers);
   serialized_length += *p_src_reg_map_length;
 //  std::cout << "read register map length (after): " << *p_src_reg_map_length << std::endl;
 
   buffer = original_buffer_addr + serialized_length;
-  ADDRINT *p_dst_reg_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  ADDRINT *p_dst_reg_map_length = reinterpret_cast<ADDRINT*>(buffer); // written register map length
   *p_dst_reg_map_length = length_of_register_map(this->dst_registers);
 //  std::cout << "written register map length: " << *p_dst_reg_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_dst_reg_map = reinterpret_cast<UINT8*>(p_dst_reg_map_length + 1);
+  UINT8 *p_dst_reg_map = reinterpret_cast<UINT8*>(p_dst_reg_map_length + 1); // written register map
   serialize_register_map(p_dst_reg_map, this->dst_registers);
   serialized_length += *p_dst_reg_map_length;
 
@@ -246,20 +251,24 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   buffer = original_buffer_addr + serialized_length;
   ADDRINT *p_load_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
   *p_load_mem_map_length = length_of_memory_map(this->load_mem_addresses);
+//  std::cout << "load mem length: " << *p_load_mem_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
   UINT8 *p_load_mem_map = reinterpret_cast<UINT8*>(p_load_mem_map_length + 1);
   serialize_memory_map(p_load_mem_map, this->load_mem_addresses);
   serialized_length += *p_load_mem_map_length;
+//  std::cout << "load mem length: " << *p_load_mem_map_length << std::endl;
 
   buffer = original_buffer_addr + serialized_length;
   ADDRINT *p_store_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
   *p_store_mem_map_length = length_of_memory_map(this->store_mem_addresses);
+//  std::cout << "stored mem length: " << *p_store_mem_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
   UINT8 *p_store_mem_map = reinterpret_cast<UINT8*>(p_store_mem_map_length + 1);
   serialize_memory_map(p_store_mem_map, this->store_mem_addresses);
   serialized_length += *p_store_mem_map_length;
+//  std::cout << "stored mem length: " << *p_store_mem_map_length << std::endl;
 
   // group 3
   buffer = original_buffer_addr + serialized_length;
@@ -267,6 +276,8 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   *p_thread_id = this->thread_id;
   serialized_length += sizeof(THREADID);
 
+//  std::cout << serialized_length << " " << this->serialized_length() << std::endl;
+//  assert(serialized_length == this->serialized_length());
   return serialized_length;
 }
 // END: class runtime_instruction_t
@@ -327,7 +338,7 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
     if (current_instruction_at_thread[thread_id]->is_memory_write) {
       std::map<ADDRINT, UINT8>::iterator mem_iter = current_instruction_at_thread[thread_id]->store_mem_addresses.begin();
       for (; mem_iter != current_instruction_at_thread[thread_id]->store_mem_addresses.end(); ++mem_iter) {
-        static UINT8 byte_value;
+        UINT8 byte_value;
         PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_iter->first), sizeof(UINT8));
         mem_iter->second = byte_value;
       }
@@ -346,7 +357,7 @@ static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thre
   rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
   for (std::map<REG, PIN_REGISTER>::iterator reg_iter = runtime_ins->src_registers.begin();
        reg_iter != runtime_ins->src_registers.end(); ++reg_iter) {
-    static PIN_REGISTER reg_value;
+    PIN_REGISTER reg_value;
     PIN_GetContextRegval(p_context, (*reg_iter).first, reinterpret_cast<UINT8*>(&reg_value));
     runtime_ins->src_registers[(*reg_iter).first] = reg_value;
   }
@@ -360,7 +371,7 @@ static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID t
 
   std::map<REG, PIN_REGISTER>::const_iterator reg_iter = runtime_ins->dst_registers.begin();
   for (; reg_iter != runtime_ins->dst_registers.end(); ++reg_iter) {
-    static PIN_REGISTER reg_value;
+    PIN_REGISTER reg_value;
     PIN_GetContextRegval(p_context, (*reg_iter).first, reinterpret_cast<UINT8*>(&reg_value));
     runtime_ins->dst_registers[(*reg_iter).first] = reg_value;
   }
@@ -370,10 +381,13 @@ static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID t
 
 static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id)
 {
+//  std::cout << "save loaded memory\n";
+//  PIN_ExitApplication(1);
+
   rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
   ADDRINT upper_addr = load_addr + load_size;
   for (ADDRINT mem_addr = load_addr; mem_addr < upper_addr; ++mem_addr) {
-    static UINT8 byte_value;
+    UINT8 byte_value;
     PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_addr), 1);
     runtime_ins->load_mem_addresses[mem_addr] = byte_value;
   }
@@ -386,7 +400,7 @@ static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size,
   rt_instruction_t *runtime_ins = current_instruction_at_thread[thread_id];
   ADDRINT upper_addr = stored_addr + stored_size;
   for (ADDRINT mem_addr = stored_addr; mem_addr < upper_addr; ++mem_addr) {
-    static UINT8 byte_value;
+    UINT8 byte_value;
     PIN_SafeCopy(&byte_value, reinterpret_cast<VOID*>(mem_addr), sizeof(UINT8));
     runtime_ins->store_mem_addresses[mem_addr] = byte_value;
   }
@@ -425,7 +439,7 @@ static VOID inject_callbacks(const INS& ins)
   if (cached_instruction_at_address.find(ins_addr) == cached_instruction_at_address.end()) {
     cached_instruction_at_address[ins_addr] = new instruction_t(ins);
   }
-  static instruction_t *instrumented_instruction = cached_instruction_at_address[ins_addr];
+  instruction_t *instrumented_instruction = cached_instruction_at_address[ins_addr];
 
   // insert callback functions for this instruction
   INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(initialize_cached_instruction_callback),

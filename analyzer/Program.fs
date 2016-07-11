@@ -22,27 +22,27 @@ let getTraceLengthX8664 (traceFileReader:System.IO.BinaryReader) =
 
 let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
   let opcode_size = traceFileReader.ReadUInt64 ()
-  Printf.printfn "opcode size: %d" opcode_size
+  // Printf.printfn "opcode size: %d" opcode_size
   // let opcode_buffer = Array.zeroCreate (int opcode_size)
   let opcode_buffer = traceFileReader.ReadBytes (int opcode_size)
   (opcode_size, opcode_buffer)
 
 let deserializeMnemonicX8664 (traceFileReader:System.IO.BinaryReader) =
   let mnemonic_len = traceFileReader.ReadUInt64 ()
-  Printf.printfn "mnemonic length: %d" mnemonic_len
+  // Printf.printfn "mnemonic length: %d" mnemonic_len
   let mnemonic_str = traceFileReader.ReadBytes (int mnemonic_len)
   System.Text.Encoding.ASCII.GetString mnemonic_str
   // (mnemonic_len, mnemonic_str)
 
 let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let reg_map_len = traceFileReader.ReadUInt64 ()
-  Printf.printfn "register map length: %d" reg_map_len
+  // Printf.printfn "register map length: %d" reg_map_len
   let reg_map_buffer = traceFileReader.ReadBytes (int reg_map_len)
   (reg_map_len, reg_map_buffer)
 
 let deserializeMemMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let mem_map_len = traceFileReader.ReadUInt64 ()
-  Printf.printfn "memory map length: %d" mem_map_len
+  // Printf.printfn "memory map length: %d" mem_map_len
   let mem_map_buffer = traceFileReader.ReadBytes (int mem_map_len)
   (mem_map_len, mem_map_buffer)
 
@@ -50,28 +50,29 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
   let trace = ResizeArray<_>()
   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
     let serialized_length = traceFileReader.ReadUInt64 ()
-    Printf.printfn "serialized length: %d" serialized_length
+    // Printf.printfn "serialized length: %d" serialized_length
     let address = traceFileReader.ReadUInt64 ()
-    Printf.printfn "address: 0x%x" address
+    // Printf.printfn "address: 0x%x" address
     let next_address = traceFileReader.ReadUInt64 ()
-    Printf.printfn "next address: 0x%x" next_address
+    // Printf.printfn "next address: 0x%x" next_address
     deserializeOpcodeX8664 traceFileReader |> ignore
     let mnemonic_string = deserializeMnemonicX8664 traceFileReader
     deserializeRegMapX8664 traceFileReader |> ignore
     deserializeRegMapX8664 traceFileReader |> ignore
     deserializeMemMapX8664 traceFileReader |> ignore
     deserializeMemMapX8664 traceFileReader |> ignore
-    let thread_id = traceFileReader.ReadUInt64 ()
-    Printf.printfn "thread id: %d" thread_id
+    let thread_id = traceFileReader.ReadUInt32 ()
+    // Printf.printfn "thread id: %d" thread_id
     trace.Add { Address = address;
                 NextAddress = next_address;
                 Mnemonic = mnemonic_string;
                 ThreadId = thread_id }
   trace
 
-let printTraceX8664 (trace:ResizeArray<Instruction<uint64, uint64>>) =
+let printTraceX8664 (trace:ResizeArray<Instruction<uint64, uint32>>) =
   for ins in trace do
-    Printf.printfn "0x%16x %s" ins.Address ins.Mnemonic
+    Printf.printfn "0x%x %s" ins.Address ins.Mnemonic
+  Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
 
 [<EntryPoint>]
 let main argv =
