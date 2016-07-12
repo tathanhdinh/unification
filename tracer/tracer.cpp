@@ -249,23 +249,23 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 
   // group 2
   buffer = original_buffer_addr + serialized_length;
-  ADDRINT *p_load_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  ADDRINT *p_load_mem_map_length = reinterpret_cast<ADDRINT*>(buffer); // loaded memory map length
   *p_load_mem_map_length = length_of_memory_map(this->load_mem_addresses);
 //  std::cout << "load mem length: " << *p_load_mem_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_load_mem_map = reinterpret_cast<UINT8*>(p_load_mem_map_length + 1);
+  UINT8 *p_load_mem_map = reinterpret_cast<UINT8*>(p_load_mem_map_length + 1); // loaded memory map
   serialize_memory_map(p_load_mem_map, this->load_mem_addresses);
   serialized_length += *p_load_mem_map_length;
 //  std::cout << "load mem length: " << *p_load_mem_map_length << std::endl;
 
   buffer = original_buffer_addr + serialized_length;
-  ADDRINT *p_store_mem_map_length = reinterpret_cast<ADDRINT*>(buffer);
+  ADDRINT *p_store_mem_map_length = reinterpret_cast<ADDRINT*>(buffer); // stored memory map length
   *p_store_mem_map_length = length_of_memory_map(this->store_mem_addresses);
 //  std::cout << "stored mem length: " << *p_store_mem_map_length << std::endl;
   serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_store_mem_map = reinterpret_cast<UINT8*>(p_store_mem_map_length + 1);
+  UINT8 *p_store_mem_map = reinterpret_cast<UINT8*>(p_store_mem_map_length + 1); // stored memory map length
   serialize_memory_map(p_store_mem_map, this->store_mem_addresses);
   serialized_length += *p_store_mem_map_length;
 //  std::cout << "stored mem length: " << *p_store_mem_map_length << std::endl;
