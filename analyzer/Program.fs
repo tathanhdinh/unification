@@ -14,16 +14,18 @@ let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
 
 (*=====================================================================================================================*)
 
-let inline getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
-  let trace_length:uint64 ref = ref (uint64 0)
+let getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
+  // let trace_length:uint64 ref = ref (uint64 0)
   match typeof<'TAddress> with
     | t when t = typeof<uint32> ->
+      let trace_length = ref (uint32 0)
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
         let instruction_length = traceFileReader.ReadUInt32 ()
         traceFileReader.BaseStream.Seek (int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
-        trace_length := !trace_length + (uint64 1)
+        trace_length := !trace_length + (uint32 1)
       unbox<'TAddress> !trace_length
     | t when t = typeof<uint64> ->
+      let trace_length = ref (uint64 0)
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
         let instruction_length = traceFileReader.ReadUInt64 ()
         traceFileReader.BaseStream.Seek (int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
@@ -159,6 +161,7 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
     // Printf.printfn "next address: 0x%x" next_address
     deserializeOpcodeX8664 traceFileReader |> ignore
     let mnemonic_string = deserializeMnemonicX8664 traceFileReader
+    Printf.printfn "%s" mnemonic_string
     deserializeRegMapX8664 traceFileReader |> ignore
     deserializeRegMapX8664 traceFileReader |> ignore
     deserializeMemMapX8664 traceFileReader |> ignore
@@ -202,12 +205,13 @@ let main argv =
     // let trace = deserializeTraceX8664 traceFileReader
     // printTraceX8664 trace
     if addrint_size = (byte 8) then
-      // deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
-      let trace_length = getTraceLength<uint64> traceFileReader
-      Printf.printfn "number of serialized instructions: %d" trace_length
+      deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
+      // let trace_length = getTraceLength<uint64> traceFileReader
+      // Printf.printfn "number of serialized instructions: %d" trace_length
     else
       // deserializeTrace<uint32> traceFileReader |> printTrace<uint32>
       let trace_length = getTraceLength<uint32> traceFileReader
+      // let trace_length = getTraceLengthX86 traceFileReader
       Printf.printfn "number of serialized instructions: %d" trace_length
     1
  // printfn "%A" argv

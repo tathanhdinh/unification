@@ -24,10 +24,12 @@ struct instruction_t
   std::map<REG, PIN_REGISTER> src_registers;
   std::map<REG, PIN_REGISTER> dst_registers;
 
+  BOOL is_fp;
+
   BOOL is_memory_read;
   BOOL is_memory_write;
   BOOL has_memory_read2;
-  BOOL has_known_memory_size;
+//  BOOL has_known_memory_size;
 
   BOOL has_fall_through;
 
@@ -46,16 +48,22 @@ instruction_t::instruction_t(const INS& ins)
 
   this->mnemonic_string = INS_Disassemble(ins);
 
-  // accessed registers can be obtained statically
-  PIN_REGISTER default_reg_value;
-  UINT32 rreg_num = INS_MaxNumRRegs(ins);
-  for (UINT32 reg_id = 0; reg_id < rreg_num; ++reg_id) {
-    this->src_registers[INS_RegR(ins, reg_id)] = default_reg_value;
-  }
+  INT32 ins_cat = INS_Category(ins);
+  this->is_fp = (ins_cat == XED_CATEGORY_X87_ALU || ins_cat == XED_CATEGORY_MMX);
 
-  UINT32 wreg_num = INS_MaxNumWRegs(ins);
-  for (UINT32 reg_id = 0; reg_id < wreg_num; ++reg_id) {
-    this->dst_registers[INS_RegW(ins, reg_id)] = default_reg_value;
+  if (this->is_fp) {} // do not capture register/memory accesses of X87 instructions
+  else {
+    // accessed registers can be obtained statically
+    PIN_REGISTER default_reg_value;
+    UINT32 rreg_num = INS_MaxNumRRegs(ins);
+    for (UINT32 reg_id = 0; reg_id < rreg_num; ++reg_id) {
+      this->src_registers[INS_RegR(ins, reg_id)] = default_reg_value;
+    }
+
+    UINT32 wreg_num = INS_MaxNumWRegs(ins);
+    for (UINT32 reg_id = 0; reg_id < wreg_num; ++reg_id) {
+      this->dst_registers[INS_RegW(ins, reg_id)] = default_reg_value;
+    }
   }
 
 //  std::cout << this->memonic_string << std::endl;
@@ -63,7 +71,7 @@ instruction_t::instruction_t(const INS& ins)
 //  if (this->is_memory_read) std::cout << "is memory read\n"; else std::cout << "is not memory read\n";
   this->is_memory_write = INS_IsMemoryWrite(ins);
   this->has_memory_read2 = INS_HasMemoryRead2(ins);
-  this->has_known_memory_size = INS_hasKnownMemorySize(ins);
+//  this->has_known_memory_size = INS_hasKnownMemorySize(ins);
 
   this->has_fall_through = INS_HasFallThrough(ins);
 }
@@ -277,7 +285,7 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   serialized_length += sizeof(THREADID);
 
 //  std::cout << serialized_length << " " << this->serialized_length() << std::endl;
-//  assert(serialized_length == this->serialized_length());
+  assert(serialized_length == this->serialized_length());
   return serialized_length;
 }
 // END: class runtime_instruction_t
@@ -445,25 +453,28 @@ static VOID inject_callbacks(const INS& ins)
   INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(initialize_cached_instruction_callback),
                  IARG_INST_PTR, IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
 
-  // these callbacks are inserted "before"
-  if (!instrumented_instruction->src_registers.empty()) {
-    INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_read_registers_callback),
-                   IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
-  }
+  if (instrumented_instruction->is_fp) {} // do not capture concrete information of X87 instructions
+  else {
+    // these callbacks are inserted "before"
+    if (!instrumented_instruction->src_registers.empty()) {
+      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_read_registers_callback),
+                     IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
+    }
 
-  if (instrumented_instruction->is_memory_read) {
-    INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_loaded_memory_callback),
-                   IARG_MEMORYREAD_EA, IARG_MEMORYREAD_SIZE, IARG_THREAD_ID, IARG_END);
-  }
+    if (instrumented_instruction->is_memory_read) {
+      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_loaded_memory_callback),
+                     IARG_MEMORYREAD_EA, IARG_MEMORYREAD_SIZE, IARG_THREAD_ID, IARG_END);
+    }
 
-  if (instrumented_instruction->has_memory_read2) {
-    INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_loaded_memory_callback),
-                   IARG_MEMORYREAD2_EA, IARG_MEMORYREAD_SIZE, IARG_THREAD_ID, IARG_END);
-  }
+    if (instrumented_instruction->has_memory_read2) {
+      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_loaded_memory_callback),
+                     IARG_MEMORYREAD2_EA, IARG_MEMORYREAD_SIZE, IARG_THREAD_ID, IARG_END);
+    }
 
-  if (instrumented_instruction->is_memory_write) {
-    INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
-                   IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
+    if (instrumented_instruction->is_memory_write) {
+      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
+                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
+    }
   }
 
 //  // if the instruction has fall through then we can insert an "after execution" callback
