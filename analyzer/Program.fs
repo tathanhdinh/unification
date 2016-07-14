@@ -200,10 +200,6 @@ let main argv =
     use traceFileReader = new System.IO.BinaryReader(System.IO.File.OpenRead(argv.[0]))
     let (addrint_size, bool_size, threadid_size) = parseTraceHeader traceFileReader
     Printf.printfn "sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrint_size bool_size threadid_size
-    // let trace_length = getTraceLengthX8664 traceFileReader
-    // Printf.printfn "number of serialized instructions: %d" trace_length
-    // let trace = deserializeTraceX8664 traceFileReader
-    // printTraceX8664 trace
     if addrint_size = (byte 8) then
       deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
       // let trace_length = getTraceLength<uint64> traceFileReader
@@ -211,7 +207,6 @@ let main argv =
     else
       // deserializeTrace<uint32> traceFileReader |> printTrace<uint32>
       let trace_length = getTraceLength<uint32> traceFileReader
-      // let trace_length = getTraceLengthX86 traceFileReader
       Printf.printfn "number of serialized instructions: %d" trace_length
     1
  // printfn "%A" argv
