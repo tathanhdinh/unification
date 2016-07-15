@@ -1,7 +1,13 @@
-﻿type Instruction<'TAddress, 'TThreadID> = { Address: 'TAddress;
-                                            NextAddress: 'TAddress;
-                                            Mnemonic: string;
-                                            ThreadId: 'TThreadID }
+﻿type Instruction<'TAddress> = { Address: 'TAddress;
+                                NextAddress: 'TAddress;
+                                Mnemonic: string;
+                                ThreadId: uint32 }
+
+type ResizeTrace<'TAddress> = ResizeArray<Instruction<'TAddress>>
+
+type BasicBlock<'TAddress> = Instruction<'TAddress> list
+
+type SimpleCFG<'TAddress> = QuickGraph.AdjacencyGraph<'TAddress, QuickGraph.SEdge<'TAddress>>
 
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrint_size = traceFileReader.ReadByte ()
@@ -165,7 +171,7 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
 
 (*=====================================================================================================================*)
 
-let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeArray<Instruction<'TAddress, uint32>>) =
+let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeTrace<'TAddress>) =
   for ins in trace do
     match typeof<'TAddress> with
       | t when t = typeof<uint32> -> Printf.printfn "0x%x %s" (unbox<uint32> ins.Address) ins.Mnemonic
@@ -173,31 +179,40 @@ let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeArray<Instruct
       | _ -> failwith "unknown type parameter"
   Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
 
-let printTraceX8664 (trace:ResizeArray<Instruction<uint64, uint32>>) =
+let printTraceX8664 (trace:ResizeArray<Instruction<uint64>>) =
   for ins in trace do
     Printf.printfn "0x%x %s" ins.Address ins.Mnemonic
   Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
 
 (*=====================================================================================================================*)
 
-let getCanonicalTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeArray<Instruction<'TAddress, uint32>>) =
-  let canonicalTrace = ref []
+let getInstructionStaticList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeTrace<'TAddress>) =
+  let insList = ref []
   for trIns in trace do
-    if not <| List.exists (fun ins -> ins.Address = trIns.Address) !canonicalTrace then
-      canonicalTrace := trIns :: !canonicalTrace
-  List.rev !canonicalTrace
+    if not <| List.exists (fun ins -> ins.Address = trIns.Address) !insList then
+      insList := trIns :: !insList
+  List.rev !insList
 
-let constructCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeArray<Instruction<'TAddress, uint32>>) =
-  let cfg_edges = ref List.empty
-  let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
-  for trEdge in allEdges do
-    if not <| List.exists (fun edge -> (fst edge).Address = (fst trEdge).Address && (snd edge).Address = (snd trEdge).Address) !cfg_edges then
-      cfg_edges := trEdge :: !cfg_edges
-  let cfg_short_edges = List.map (fun (fromVertex, toVertex) -> QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfg_edges
+let constructCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traces:ResizeTrace<'TAddress> list) =
+  let cfg_edges = ref []
+  List.iter (fun trace ->
+             let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
+             for trEdge in allEdges do
+             if not <| List.exists (fun edge ->
+                                    (fst edge).Address = (fst trEdge).Address &&
+                                    (snd edge).Address = (snd trEdge).Address) !cfg_edges then
+               cfg_edges := trEdge :: !cfg_edges) traces
+  let cfg_short_edges = List.map (fun (fromVertex, toVertex) ->
+                                  QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfg_edges
   QuickGraph.GraphExtensions.ToAdjacencyGraph cfg_short_edges
 
-let constructBBCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (canonicalTrace) (cfg:QuickGraph.AdjacencyGraph<'TAddress, QuickGraph.SEdge<'TAddress>>) =
-
+let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insStaticList:Instruction<'TAddress> list) (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
+  let instLinearList = ref []
+  let dfsAlgo = QuickGraph.Algorithms.Search.DepthFirstSearchAlgorithm(cfg)
+  dfsAlgo.SetRootVertex(startInsAddr)
+  dfsAlgo.add_DiscoverVertex(fun vertex -> instLinearList := vertex :: !instLinearList)
+  dfsAlgo.Compute()
+  List.rev !instLinearList
 
 (*=====================================================================================================================*)
 
