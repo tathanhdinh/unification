@@ -1,7 +1,4 @@
-﻿// Learn more about F# at http://fsharp.net
-// See the 'F# Tutorial' project for more help.
-
-type Instruction<'TAddress, 'TThreadID> = { Address: 'TAddress;
+﻿type Instruction<'TAddress, 'TThreadID> = { Address: 'TAddress;
                                             NextAddress: 'TAddress;
                                             Mnemonic: string;
                                             ThreadId: 'TThreadID }
@@ -15,7 +12,6 @@ let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
 (*=====================================================================================================================*)
 
 let getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
-  // let trace_length:uint64 ref = ref (uint64 0)
   match typeof<'TAddress> with
     | t when t = typeof<uint32> ->
       let trace_length = ref (uint32 0)
@@ -62,7 +58,6 @@ let deserializeOpcode<'TAddress when 'TAddress : unmanaged> (traceFileReader:Sys
 
 let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
   let opcode_size = traceFileReader.ReadUInt64 ()
-  // Printf.printfn "opcode size: %d" opcode_size
   let opcode_buffer = traceFileReader.ReadBytes (int opcode_size)
   opcode_buffer
   // (opcode_size, opcode_buffer)
@@ -96,7 +91,6 @@ let deserializeRegMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
 
 let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let reg_map_len = traceFileReader.ReadUInt64 ()
-  // Printf.printfn "register map length: %d" reg_map_len
   let reg_map_buffer = traceFileReader.ReadBytes (int reg_map_len)
   (reg_map_len, reg_map_buffer)
 
@@ -113,7 +107,6 @@ let deserializeMemMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
 
 let deserializeMemMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let mem_map_len = traceFileReader.ReadUInt64 ()
-  // Printf.printfn "memory map length: %d" mem_map_len
   let mem_map_buffer = traceFileReader.ReadBytes (int mem_map_len)
   (mem_map_len, mem_map_buffer)
 
@@ -154,11 +147,8 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
   let trace = ResizeArray<_>()
   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
     let serialized_length = traceFileReader.ReadUInt64 ()
-    // Printf.printfn "serialized length: %d" serialized_length
     let address = traceFileReader.ReadUInt64 ()
-    // Printf.printfn "address: 0x%x" address
     let next_address = traceFileReader.ReadUInt64 ()
-    // Printf.printfn "next address: 0x%x" next_address
     deserializeOpcodeX8664 traceFileReader |> ignore
     let mnemonic_string = deserializeMnemonicX8664 traceFileReader
     Printf.printfn "%s" mnemonic_string
@@ -167,7 +157,6 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
     deserializeMemMapX8664 traceFileReader |> ignore
     deserializeMemMapX8664 traceFileReader |> ignore
     let thread_id = traceFileReader.ReadUInt32 ()
-    // Printf.printfn "thread id: %d" thread_id
     trace.Add { Address = address;
                 NextAddress = next_address;
                 Mnemonic = mnemonic_string;
@@ -191,6 +180,27 @@ let printTraceX8664 (trace:ResizeArray<Instruction<uint64, uint32>>) =
 
 (*=====================================================================================================================*)
 
+let getCanonicalTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeArray<Instruction<'TAddress, uint32>>) =
+  let canonicalTrace = ref []
+  for trIns in trace do
+    if not <| List.exists (fun ins -> ins.Address = trIns.Address) !canonicalTrace then
+      canonicalTrace := trIns :: !canonicalTrace
+  List.rev !canonicalTrace
+
+let constructCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeArray<Instruction<'TAddress, uint32>>) =
+  let cfg_edges = ref List.empty
+  let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
+  for trEdge in allEdges do
+    if not <| List.exists (fun edge -> (fst edge).Address = (fst trEdge).Address && (snd edge).Address = (snd trEdge).Address) !cfg_edges then
+      cfg_edges := trEdge :: !cfg_edges
+  let cfg_short_edges = List.map (fun (fromVertex, toVertex) -> QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfg_edges
+  QuickGraph.GraphExtensions.ToAdjacencyGraph cfg_short_edges
+
+let constructBBCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (canonicalTrace) (cfg:QuickGraph.AdjacencyGraph<'TAddress, QuickGraph.SEdge<'TAddress>>) =
+
+
+(*=====================================================================================================================*)
+
 [<EntryPoint>]
 let main argv =
   if Array.length argv <> 1 then
@@ -209,5 +219,3 @@ let main argv =
       let trace_length = getTraceLength<uint32> traceFileReader
       Printf.printfn "number of serialized instructions: %d" trace_length
     1
- // printfn "%A" argv
- // 0 // return an integer exit code
