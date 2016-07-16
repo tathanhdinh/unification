@@ -9,6 +9,8 @@ type BasicBlock<'TAddress> = Instruction<'TAddress> list
 
 type SimpleCFG<'TAddress> = QuickGraph.AdjacencyGraph<'TAddress, QuickGraph.SEdge<'TAddress>>
 
+type BasicBlockCFG<'TAddress> = QuickGraph.AdjacencyGraph<BasicBlock<'TAddress>, QuickGraph.SEdge<BasicBlock<'TAddress>>>
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrint_size = traceFileReader.ReadByte ()
   let bool_size = traceFileReader.ReadByte ()
@@ -194,25 +196,34 @@ let getInstructionStaticList<'TAddress when 'TAddress : unmanaged and 'TAddress 
   List.rev !insList
 
 let constructCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traces:ResizeTrace<'TAddress> list) =
-  let cfg_edges = ref []
+  let cfgEdges = ref []
   List.iter (fun trace ->
              let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
              for trEdge in allEdges do
              if not <| List.exists (fun edge ->
                                     (fst edge).Address = (fst trEdge).Address &&
-                                    (snd edge).Address = (snd trEdge).Address) !cfg_edges then
-               cfg_edges := trEdge :: !cfg_edges) traces
+                                    (snd edge).Address = (snd trEdge).Address) !cfgEdges then
+               cfgEdges := trEdge :: !cfgEdges) traces
   let cfg_short_edges = List.map (fun (fromVertex, toVertex) ->
-                                  QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfg_edges
+                                  QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfgEdges
   QuickGraph.GraphExtensions.ToAdjacencyGraph cfg_short_edges
 
-let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insStaticList:Instruction<'TAddress> list) (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
+let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
   let instLinearList = ref []
   let dfsAlgo = QuickGraph.Algorithms.Search.DepthFirstSearchAlgorithm(cfg)
   dfsAlgo.SetRootVertex(startInsAddr)
   dfsAlgo.add_DiscoverVertex(fun vertex -> instLinearList := vertex :: !instLinearList)
   dfsAlgo.Compute()
   List.rev !instLinearList
+
+let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
+  let bbCfgEdges = ref [] // list of pair of basic blocks
+  let currentBb = ref [] // each basic block is a list of instruction addresses
+  let linearList = computeLinearList startInsAddr cfg
+  for insAddr in linearList do
+    if List.isEmpty !currentBb then
+      currentBb := [insAddr]
+      
 
 (*=====================================================================================================================*)
 
