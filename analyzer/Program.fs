@@ -5,6 +5,8 @@
 
 type ResizeTrace<'TAddress> = ResizeArray<Instruction<'TAddress>>
 
+type DynamicTrace<'TAddress> = ResizeArray<'TAddress>
+
 type InstructionMap<'TAddress when 'TAddress : comparison> = Map<'TAddress, Instruction<'TAddress>>
 
 type BasicBlock<'TAddress> = 'TAddress list
@@ -14,29 +16,29 @@ type SimpleCFG<'TAddress> = QuickGraph.BidirectionalGraph<'TAddress, QuickGraph.
 type BasicBlockCFG<'TAddress> = QuickGraph.BidirectionalGraph<BasicBlock<'TAddress>, QuickGraph.SEdge<BasicBlock<'TAddress>>>
 
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
-  let addrint_size = traceFileReader.ReadByte ()
-  let bool_size = traceFileReader.ReadByte ()
-  let threadid_size = traceFileReader.ReadByte ()
-  (addrint_size, bool_size, threadid_size)
+  let addrintSize = traceFileReader.ReadByte ()
+  let boolSize = traceFileReader.ReadByte ()
+  let threadidSize = traceFileReader.ReadByte ()
+  (addrintSize, boolSize, threadidSize)
 
 (*=====================================================================================================================*)
 
 let getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   match typeof<'TAddress> with
     | t when t = typeof<uint32> ->
-      let trace_length = ref (uint32 0)
+      let mutable traceLength = (uint32 0)
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
         let instruction_length = traceFileReader.ReadUInt32 ()
         traceFileReader.BaseStream.Seek (int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
-        trace_length := !trace_length + (uint32 1)
-      unbox<'TAddress> !trace_length
+        traceLength <- traceLength + (uint32 1)
+      unbox<'TAddress> traceLength
     | t when t = typeof<uint64> ->
-      let trace_length = ref (uint64 0)
+      let mutable traceLength = (uint64 0)
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-        let instruction_length = traceFileReader.ReadUInt64 ()
-        traceFileReader.BaseStream.Seek (int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
-        trace_length := !trace_length + (uint64 1)
-      unbox<'TAddress> !trace_length
+        let insLength = traceFileReader.ReadUInt64 ()
+        traceFileReader.BaseStream.Seek (int64 insLength, System.IO.SeekOrigin.Current) |> ignore
+        traceLength <- traceLength + (uint64 1)
+      unbox<'TAddress> traceLength
     | _ -> failwith "unknown type parameter"
 
 let getTraceLengthX86 (traceFileReader:System.IO.BinaryReader) =
@@ -58,13 +60,13 @@ let getTraceLengthX8664 (traceFileReader:System.IO.BinaryReader) =
 (*=====================================================================================================================*)
 
 let deserializeOpcode<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
-  let opcode_size =
+  let opcodeSize =
     match typeof<'TAddress> with
       | t when t = typeof<uint32> -> int (traceFileReader.ReadUInt32 ())
       | t when t = typeof<uint64> -> int (traceFileReader.ReadUInt64 ())
       | _ -> failwith "unknown type parameter"
-  let opcode_buffer = traceFileReader.ReadBytes opcode_size
-  opcode_buffer
+  let opcodeBuffer = traceFileReader.ReadBytes opcodeSize
+  opcodeBuffer
 
 let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
   let opcode_size = traceFileReader.ReadUInt64 ()
@@ -75,13 +77,13 @@ let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
 (*=====================================================================================================================*)
 
 let deserializeMnemonic<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
-  let mnemonic_len =
+  let mnemonicLength =
     match typeof<'TAddress> with
       | t when t = typeof<uint32> -> int (traceFileReader.ReadUInt32 ())
       | t when t = typeof<uint64> -> int (traceFileReader.ReadUInt64 ())
       | _ -> failwith "unknown type parameter"
-  let mnemonic_str = traceFileReader.ReadBytes mnemonic_len
-  System.Text.Encoding.ASCII.GetString mnemonic_str
+  let mnemonicStr = traceFileReader.ReadBytes mnemonicLength
+  System.Text.Encoding.ASCII.GetString mnemonicStr
 
 let deserializeMnemonicX8664 (traceFileReader:System.IO.BinaryReader) =
   let mnemonic_len = traceFileReader.ReadUInt64 ()
@@ -91,13 +93,13 @@ let deserializeMnemonicX8664 (traceFileReader:System.IO.BinaryReader) =
 (*=====================================================================================================================*)
 
 let deserializeRegMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
-  let reg_map_len =
+  let regMapLength =
     match typeof<'TAddress> with
       | t when t = typeof<uint32> -> int (traceFileReader.ReadUInt32 ())
       | t when t = typeof<uint64> -> int (traceFileReader.ReadUInt64 ())
       | _ -> failwith "unknown type parameter"
-  let reg_map_buffer = traceFileReader.ReadBytes reg_map_len
-  reg_map_buffer
+  let regMapBuffer = traceFileReader.ReadBytes regMapLength
+  regMapBuffer
 
 let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let reg_map_len = traceFileReader.ReadUInt64 ()
@@ -107,13 +109,13 @@ let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
 (*=====================================================================================================================*)
 
 let deserializeMemMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
-  let mem_map_len =
+  let memMapLength =
     match typeof<'TAddress> with
       | t when t = typeof<uint32> -> int (traceFileReader.ReadUInt32 ())
       | t when t = typeof<uint64> -> int (traceFileReader.ReadUInt64 ())
       | _ -> failwith "unknown type parameter"
-  let mem_map_buffer = traceFileReader.ReadBytes mem_map_len
-  mem_map_buffer
+  let memMapBuffer = traceFileReader.ReadBytes memMapLength
+  memMapBuffer
 
 let deserializeMemMapX8664 (traceFileReader:System.IO.BinaryReader) =
   let mem_map_len = traceFileReader.ReadUInt64 ()
@@ -152,6 +154,40 @@ let deserializeTrace<'TAddress when 'TAddress : unmanaged> (traceFileReader:Syst
                 Mnemonic = mnemonic_string;
                 ThreadId = thread_id }
   trace
+
+let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traceFileReader:System.IO.BinaryReader) =
+  let insDynamicTrace = DynamicTrace<'TAddress>()
+  let mutable insStaticMap = Map.empty
+  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+    let serialized_length =
+      match typeof<'TAddress> with
+        | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
+        | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
+        | _ -> failwith "unknown type parameter"
+    let address =
+      match typeof<'TAddress> with
+        | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
+        | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
+        | _ -> failwith "unknown type parameter"
+    let next_address =
+      match typeof<'TAddress> with
+        | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
+        | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
+        | _ -> failwith "unknown type parameter"
+    deserializeOpcode<'TAddress> traceFileReader |> ignore
+    let mnemonic_string = deserializeMnemonic<'TAddress> traceFileReader
+    deserializeRegMap<'TAddress> traceFileReader |> ignore
+    deserializeRegMap<'TAddress> traceFileReader |> ignore
+    deserializeMemMap<'TAddress> traceFileReader |> ignore
+    deserializeMemMap<'TAddress> traceFileReader |> ignore
+    let thread_id = traceFileReader.ReadUInt32 ()
+    insDynamicTrace.Add address
+    if not <| Map.containsKey address insStaticMap then
+      insStaticMap <- Map.add address { Address = address;
+                                        NextAddress = next_address;
+                                        Mnemonic = mnemonic_string;
+                                        ThreadId = thread_id } insStaticMap
+  (insStaticMap, insDynamicTrace)
 
 let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
   let trace = ResizeArray<_>()
@@ -255,10 +291,7 @@ let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
         currentBb <- []
   bBs
 
-// let getSimpleFirstVertex<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) =
-//   List.head basicBlock
-
-let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (cfg : SimpleCFG<'TAddress>) =
+let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (cfg:SimpleCFG<'TAddress>) =
   let lastVertex = List.reduce (fun f s -> s) basicBlock
   let outEdges = cfg.OutEdges(lastVertex)
   let mutable outVertices = []
@@ -284,36 +317,56 @@ let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : 
   let basicBlocksEdges = List.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) basicBlockPairs
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlocksEdges
 
-// let to_hex_string<'TAddress> (insAddr:'TAddress) =
-//   match typeof
-
 let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (insAddr : 'TAddress) =
   match typeof<'TAddress> with
-    | t when t = typeof<uint32> -> (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
-    | t when t = typeof<uint64> -> (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+    | t when t = typeof<uint32> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+    | t when t = typeof<uint64> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
     | _ -> failwith "unknown type parameter"
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
-  let mutable basicBlockLabel = ""
-  match typeof<'TAddress> with
-    | t when t = typeof<uint32> -> List.iter (fun insAddr ->
-                                              basicBlockLabel <- (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic) +
-                                                                  basicBlockLabel) basicBlock
-    | t when t = typeof<uint64> -> List.iter (fun insAddr ->
-                                              basicBlockLabel <- (Printf.sprintf "0x%016x  %s\l" (unbox<uint64> insAddr) (staticInss.[insAddr]).Mnemonic) +
-                                                                  basicBlockLabel) basicBlock
-    | _ -> failwith "unknown type parameter"
-  basicBlockLabel
+  let basicBlockLabel = ref ""
+  List.iter (fun insAddr ->
+             basicBlockLabel := (Printf.sprintf "%s\l" <|
+                                 stringOfInstruction staticInss insAddr) + !basicBlockLabel) basicBlock
+  !basicBlockLabel
 
-let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilenam =
+type BasicBlockDotEngine() =
+  interface QuickGraph.Graphviz.IDotEngine with
+    member this.Run (imgType:QuickGraph.Graphviz.Dot.GraphvizImageType, dotString:string, outputFilename:string) =
+      System.IO.File.WriteAllText(outputFilename, dotString)
+      outputFilename
+
+let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilename =
   let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(bbCFG)
   graphvizFormat.FormatVertex.Add(fun args ->
                                   let basicBlock = args.Vertex
-                                  let basicBlockLabel = getBasicBlockLabel staticInss basicBlock
-                                  args.VertexFormatter.Label <- basicBlockLabel
-                                  )
+                                  args.VertexFormatter.Label <- getBasicBlockLabel staticInss basicBlock
+                                  args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box
+                                  args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded)
+  graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename) |> ignore
 
+(*=====================================================================================================================*)
 
+type TraceRangeFilterStates =
+  | BeforeStart = 0
+  | BetweenStartStop = 1
+  | AfterStop = 2
+
+let filterTraceRange<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filterredTrace = DynamicTrace<'TAddress>()
+  let mutable filterState:TraceRangeFilterStates = TraceRangeFilterStates.BeforeStart
+  for ins in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        if ins = startAddr then
+          filterState <- TraceRangeFilterStates.BetweenStartStop
+          filterredTrace.Add ins
+      | TraceRangeFilterStates.BetweenStartStop ->
+        if ins = stopAddr then
+          filterState <- TraceRangeFilterStates.AfterStop
+        filterredTrace.Add ins
+      | TraceRangeFilterStates.AfterStop -> ()
+  filterredTrace
 
 (*=====================================================================================================================*)
 
