@@ -5,11 +5,13 @@
 
 type ResizeTrace<'TAddress> = ResizeArray<Instruction<'TAddress>>
 
-type BasicBlock<'TAddress> = Instruction<'TAddress> list
+type InstructionMap<'TAddress when 'TAddress : comparison> = Map<'TAddress, Instruction<'TAddress>>
 
-type SimpleCFG<'TAddress> = QuickGraph.AdjacencyGraph<'TAddress, QuickGraph.SEdge<'TAddress>>
+type BasicBlock<'TAddress> = 'TAddress list
 
-type BasicBlockCFG<'TAddress> = QuickGraph.AdjacencyGraph<BasicBlock<'TAddress>, QuickGraph.SEdge<BasicBlock<'TAddress>>>
+type SimpleCFG<'TAddress> = QuickGraph.BidirectionalGraph<'TAddress, QuickGraph.SEdge<'TAddress>>
+
+type BasicBlockCFG<'TAddress> = QuickGraph.BidirectionalGraph<BasicBlock<'TAddress>, QuickGraph.SEdge<BasicBlock<'TAddress>>>
 
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrint_size = traceFileReader.ReadByte ()
@@ -188,12 +190,17 @@ let printTraceX8664 (trace:ResizeArray<Instruction<uint64>>) =
 
 (*=====================================================================================================================*)
 
-let getInstructionStaticList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeTrace<'TAddress>) =
-  let insList = ref []
+let computeInstructionStaticMap<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace:ResizeTrace<'TAddress>) =
+  let mutable insMap = Map.empty
   for trIns in trace do
-    if not <| List.exists (fun ins -> ins.Address = trIns.Address) !insList then
-      insList := trIns :: !insList
-  List.rev !insList
+    if not <| Map.containsKey trIns.Address insMap then
+      insMap <- Map.add trIns.Address trIns insMap
+  insMap
+  // let insList = ref []
+  // for trIns in trace do
+  //   if not <| List.exists (fun ins -> ins.Address = trIns.Address) !insList then
+  //     insList := trIns :: !insList
+  // List.rev !insList
 
 let constructCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traces:ResizeTrace<'TAddress> list) =
   let cfgEdges = ref []
@@ -206,7 +213,7 @@ let constructCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : 
                cfgEdges := trEdge :: !cfgEdges) traces
   let cfg_short_edges = List.map (fun (fromVertex, toVertex) ->
                                   QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfgEdges
-  QuickGraph.GraphExtensions.ToAdjacencyGraph cfg_short_edges
+  QuickGraph.GraphExtensions.ToBidirectionalGraph cfg_short_edges
 
 let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
   let instLinearList = ref []
@@ -216,14 +223,97 @@ let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : compa
   dfsAlgo.Compute()
   List.rev !instLinearList
 
-let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
-  let bbCfgEdges = ref [] // list of pair of basic blocks
-  let currentBb = ref [] // each basic block is a list of instruction addresses
+let addInsToBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insAddr : 'TAddress) (basicBlock : BasicBlock<'TAddress> byref) =
+  if not <| List.contains insAddr basicBlock then
+    basicBlock <- insAddr :: basicBlock
+  // if List.contains insAddr basicBlock then
+  //   basicBlock
+  // else
+  //   insAddr::basicBlock
+let saveBasicBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (basicBlocks : BasicBlock<'TAddress> list byref) =
+  basicBlocks <- (List.rev basicBlock) :: basicBlocks
+
+let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
+  let mutable bBs = []
+  let mutable currentBb = []
   let linearList = computeLinearList startInsAddr cfg
   for insAddr in linearList do
-    if List.isEmpty !currentBb then
-      currentBb := [insAddr]
-      
+    if List.isEmpty currentBb then currentBb <- [insAddr]
+    if cfg.InDegree(insAddr) = 1 then
+      // currentBb := addInsToBlock insAddr !currentBb
+      addInsToBlock insAddr &currentBb
+      if cfg.OutDegree(insAddr) <> 1 then
+        // bBs <- (List.rev currentBb) :: bBs
+        saveBasicBlock currentBb &bBs
+        currentBb <- []
+    else
+      bBs <- currentBb :: bBs
+      currentBb <- [insAddr]
+      if cfg.OutDegree(insAddr) > 1 then
+        // bBs <- (List.rev currentBb) :: bBs
+        saveBasicBlock currentBb &bBs
+        currentBb <- []
+  bBs
+
+// let getSimpleFirstVertex<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) =
+//   List.head basicBlock
+
+let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (cfg : SimpleCFG<'TAddress>) =
+  let lastVertex = List.reduce (fun f s -> s) basicBlock
+  let outEdges = cfg.OutEdges(lastVertex)
+  let mutable outVertices = []
+  for edge in outEdges do
+    outVertices <- edge.Target :: outVertices
+  outVertices
+
+let getSimpleSourceVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (cfg : SimpleCFG<'TAddress>) =
+  let firstVertex = List.head basicBlock
+  let inEdges = cfg.InEdges(firstVertex)
+  let mutable inVertices = []
+  for edge in inEdges do
+    inVertices <- edge.Target :: inVertices
+  inVertices
+
+let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlocks : BasicBlock<'TAddress> list) (cfg : SimpleCFG<'TAddress>) =
+  let mutable basicBlockPairs = []
+  for srcBb in basicBlocks do
+    for dstBb in basicBlocks do
+      let simpleOutVertices = getSimpleDestinationVertices srcBb cfg
+      if List.contains (List.head dstBb) simpleOutVertices then
+        basicBlockPairs <- (srcBb, dstBb) :: basicBlockPairs
+  let basicBlocksEdges = List.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) basicBlockPairs
+  QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlocksEdges
+
+// let to_hex_string<'TAddress> (insAddr:'TAddress) =
+//   match typeof
+
+let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (insAddr : 'TAddress) =
+  match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+    | t when t = typeof<uint64> -> (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+    | _ -> failwith "unknown type parameter"
+
+let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
+  let mutable basicBlockLabel = ""
+  match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> List.iter (fun insAddr ->
+                                              basicBlockLabel <- (Printf.sprintf "0x%016x  %s\l" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic) +
+                                                                  basicBlockLabel) basicBlock
+    | t when t = typeof<uint64> -> List.iter (fun insAddr ->
+                                              basicBlockLabel <- (Printf.sprintf "0x%016x  %s\l" (unbox<uint64> insAddr) (staticInss.[insAddr]).Mnemonic) +
+                                                                  basicBlockLabel) basicBlock
+    | _ -> failwith "unknown type parameter"
+  basicBlockLabel
+
+let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilenam =
+  let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(bbCFG)
+  graphvizFormat.FormatVertex.Add(fun args ->
+                                  let basicBlock = args.Vertex
+                                  let basicBlockLabel = getBasicBlockLabel staticInss basicBlock
+                                  args.VertexFormatter.Label <- basicBlockLabel
+                                  )
+
+
 
 (*=====================================================================================================================*)
 
