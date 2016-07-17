@@ -15,6 +15,12 @@ type SimpleCFG<'TAddress> = QuickGraph.BidirectionalGraph<'TAddress, QuickGraph.
 
 type BasicBlockCFG<'TAddress> = QuickGraph.BidirectionalGraph<BasicBlock<'TAddress>, QuickGraph.SEdge<BasicBlock<'TAddress>>>
 
+let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
+  match box insAddr with
+    | :? uint32 as uint32Addr -> Printf.sprintf "0x%x" uint32Addr
+    | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
+    | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -169,24 +175,24 @@ let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress :
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
         | _ -> failwith "unknown type parameter"
-    let next_address =
+    let nextAddress =
       match typeof<'TAddress> with
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
         | _ -> failwith "unknown type parameter"
     deserializeOpcode<'TAddress> traceFileReader |> ignore
-    let mnemonic_string = deserializeMnemonic<'TAddress> traceFileReader
+    let mnemonicString = deserializeMnemonic<'TAddress> traceFileReader
     deserializeRegMap<'TAddress> traceFileReader |> ignore
     deserializeRegMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
-    let thread_id = traceFileReader.ReadUInt32 ()
+    let threadId = traceFileReader.ReadUInt32 ()
     insDynamicTrace.Add address
     if not <| Map.containsKey address insStaticMap then
       insStaticMap <- Map.add address { Address = address;
-                                        NextAddress = next_address;
-                                        Mnemonic = mnemonic_string;
-                                        ThreadId = thread_id } insStaticMap
+                                        NextAddress = nextAddress;
+                                        Mnemonic = mnemonicString;
+                                        ThreadId = threadId } insStaticMap
   (insStaticMap, insDynamicTrace)
 
 let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
@@ -210,6 +216,10 @@ let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
   trace
 
 (*=====================================================================================================================*)
+
+let printDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insMap:InstructionMap<'TAddress>) (trace:DynamicTrace<'TAddress>) =
+  for insAddr in trace do
+    Printf.printfn "%s  %s" (hexStringOfValue insAddr) (insMap.[insAddr]).Mnemonic
 
 let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeTrace<'TAddress>) =
   for ins in trace do
@@ -260,12 +270,9 @@ let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : compa
   List.rev !instLinearList
 
 let addInsToBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insAddr : 'TAddress) (basicBlock : BasicBlock<'TAddress> byref) =
-  if not <| List.contains insAddr basicBlock then
+ if not <| List.contains insAddr basicBlock then
     basicBlock <- insAddr :: basicBlock
-  // if List.contains insAddr basicBlock then
-  //   basicBlock
-  // else
-  //   insAddr::basicBlock
+
 let saveBasicBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (basicBlocks : BasicBlock<'TAddress> list byref) =
   basicBlocks <- (List.rev basicBlock) :: basicBlocks
 
@@ -318,10 +325,11 @@ let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : 
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlocksEdges
 
 let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (insAddr : 'TAddress) =
-  match typeof<'TAddress> with
-    | t when t = typeof<uint32> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
-    | t when t = typeof<uint64> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
-    | _ -> failwith "unknown type parameter"
+  Printf.sprintf "%s  %s" (hexStringOfValue insAddr) (staticInss.[insAddr].Mnemonic)
+  // match typeof<'TAddress> with
+  //   | t when t = typeof<uint32> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+  //   | t when t = typeof<uint64> -> (Printf.sprintf "0x%016x  %s" (unbox<uint32> insAddr) (staticInss.[insAddr]).Mnemonic)
+  //   | _ -> failwith "unknown type parameter"
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
   let basicBlockLabel = ref ""
@@ -352,21 +360,98 @@ type TraceRangeFilterStates =
   | BetweenStartStop = 1
   | AfterStop = 2
 
-let filterTraceRange<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
-  let filterredTrace = DynamicTrace<'TAddress>()
-  let mutable filterState:TraceRangeFilterStates = TraceRangeFilterStates.BeforeStart
+// keep all instructions in [start, end]
+let selectBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
+  for insAddr in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        if insAddr = startAddr then
+          filterState <- TraceRangeFilterStates.BetweenStartStop
+          filteredTrace.Add insAddr
+      | TraceRangeFilterStates.BetweenStartStop ->
+        filteredTrace.Add insAddr
+        if insAddr = stopAddr then filterState <- TraceRangeFilterStates.AfterStop
+      | TraceRangeFilterStates.AfterStop -> ()
+      | _ -> failwith "invalid filter state"
+  filteredTrace
+
+// remove all instructions in (start, end)
+let removeOpenInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
+  for insAddr in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        filteredTrace.Add insAddr
+        if insAddr = startAddr then filterState <- TraceRangeFilterStates.BetweenStartStop
+      | TraceRangeFilterStates.BetweenStartStop ->
+        if insAddr = stopAddr then
+          filterState <- TraceRangeFilterStates.AfterStop
+          filteredTrace.Add insAddr
+      | TraceRangeFilterStates.AfterStop ->
+        filteredTrace.Add insAddr
+      | _ -> failwith "invalid filter state"
+  filteredTrace
+
+// keep all instructions in [start, end)
+let filterLeftBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
   for ins in trace do
     match filterState with
       | TraceRangeFilterStates.BeforeStart ->
-        if ins = startAddr then
+        if (ins = startAddr) then
           filterState <- TraceRangeFilterStates.BetweenStartStop
-          filterredTrace.Add ins
+          filteredTrace.Add ins
       | TraceRangeFilterStates.BetweenStartStop ->
-        if ins = stopAddr then
+        if (ins = stopAddr) then
           filterState <- TraceRangeFilterStates.AfterStop
-        filterredTrace.Add ins
+        else
+          filteredTrace.Add ins
       | TraceRangeFilterStates.AfterStop -> ()
-  filterredTrace
+      | _ -> failwith "invalid filter state"
+
+// keep all instructions in (start, end]
+let filterRightBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
+  for ins in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        if (ins = startAddr) then filterState <- TraceRangeFilterStates.BetweenStartStop
+      | TraceRangeFilterStates.BetweenStartStop ->
+        filteredTrace.Add ins
+        if (ins = startAddr) then filterState <- TraceRangeFilterStates.AfterStop
+      | TraceRangeFilterStates.AfterStop -> ()
+      | _ -> failwith "invalid filter state"
+
+let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (callInsAddr:'TAddress) (staticInsMap:InstructionMap<'TAddress>) (trace:DynamicTrace<'TAddress>) =
+  let callIns = staticInsMap.[callInsAddr]
+  let nextInsAddr = callIns.NextAddress
+  removeOpenInterval (callInsAddr, nextInsAddr) trace
+
+// remove all instructions in (-inf, pivot]
+let removeRightBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (pivotAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable pivotReached = false
+  for insAddr in trace do
+    if pivotReached then
+      filteredTrace.Add insAddr
+    else
+      if insAddr = pivotAddr then pivotReached <- true
+  filteredTrace
+
+// remove all instruction in [pivot, +inf)
+let removeLeftBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (pivotAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let filteredTrace = DynamicTrace<'TAddress>()
+  let mutable pivotReached = false
+  for insAddr in trace do
+    if insAddr = pivotAddr then pivotReached <- true
+    if not pivotReached then filteredTrace.Add insAddr
+  filteredTrace
+
 
 (*=====================================================================================================================*)
 
@@ -376,15 +461,25 @@ let main argv =
     Printf.printfn "give a serialized trace file from the command line (e.g. analyzer trace_file)"
     0
   else
+    let timer = new System.Diagnostics.Stopwatch()
+    timer.Start()
     use traceFileReader = new System.IO.BinaryReader(System.IO.File.OpenRead(argv.[0]))
     let (addrint_size, bool_size, threadid_size) = parseTraceHeader traceFileReader
-    Printf.printfn "sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrint_size bool_size threadid_size
+    Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrint_size bool_size threadid_size
     if addrint_size = (byte 8) then
-      deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
+      let (insMap, insTrace) = deserializeDynamicTrace<uint64> traceFileReader
+      // printDynamicTrace insMap insTrace
+      Printf.printfn "%d instruction parsed" (Seq.length insTrace)
+      let mutable filteredTrace = selectBoundedInterval<uint64> (0x4004f0UL, 0x400501UL) insTrace
+      filteredTrace <- filterStandardCall<uint64> 0x4004f9UL insMap filteredTrace
+      // ignore filteredTrace
+      printDynamicTrace insMap filteredTrace
+      // deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
       // let trace_length = getTraceLength<uint64> traceFileReader
       // Printf.printfn "number of serialized instructions: %d" trace_length
     else
       // deserializeTrace<uint32> traceFileReader |> printTrace<uint32>
       let trace_length = getTraceLength<uint32> traceFileReader
       Printf.printfn "number of serialized instructions: %d" trace_length
+    Printf.printfn "elapsed time: %i ms" timer.ElapsedMilliseconds
     1
