@@ -252,12 +252,15 @@ let constructSimpleCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddr
   // let mutable allVertexPairs = []
   let allVertexPairs = ResizeArray<_>()
   for trace in traces do
-    let traceVertexPairs = Seq.pairwise <| ResizeArray.toSeq trace
-    for vertexPair in traceVertexPairs do
-      if not <| Seq.exists (fun edge -> edge = vertexPair) allVertexPairs then
-        // allVertexPairs <- vertexPair :: allVertexPairs
-        allVertexPairs.Add vertexPair
-  let basicEdges = Seq.map (fun (fromAddr, toAddr) -> QuickGraph.SEdge(fromAddr, toAddr)) allVertexPairs
+    // let traceVertexPairs = Seq.pairwise <| ResizeArray.toSeq trace
+    let traceVertexPairs = (ResizeArray.toSeq >> Seq.pairwise >> Seq.distinct) trace
+    allVertexPairs.AddRange traceVertexPairs
+    // for vertexPair in traceVertexPairs do
+    //   if not <| Seq.exists (fun edge -> edge = vertexPair) allVertexPairs then
+    //     // allVertexPairs <- vertexPair :: allVertexPairs
+    //     allVertexPairs.Add vertexPair
+  let basicEdges = (Seq.map (fun (fromAddr, toAddr) -> QuickGraph.SEdge(fromAddr, toAddr)) >> Seq.distinct) allVertexPairs
+  Printf.printfn "edges: %d" <| Seq.length basicEdges
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicEdges
   // List.iter (fun trace ->
   //            let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
@@ -512,15 +515,15 @@ let main argv =
       Printf.printfn "parsed instructions: %d" (Seq.length insTrace)
       // let filteredTrace = selectBoundedInterval<uint64> (0x4004f0UL, 0x400501UL) insTrace
       let filteredTrace = insTrace
-      Printf.printfn "trace length: %d" <| Seq.length filteredTrace
+      Printf.printfn "trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
       // printDynamicTrace insMap filteredTrace
       let rootInsAddr = Seq.head filteredTrace
       Printf.printfn "root address: 0x%x" rootInsAddr
-      Printf.printf "constructing simple CFG..."
+      Printf.printfn "constructing simple CFG... "
       let basicCFG = constructSimpleCfgFromTraces<uint64> [filteredTrace]
-      Printf.printfn " done."
+      Printf.printfn "done."
       // printSimpleCfg insMap basicCFG "hello_simple.dot"
-      Printf.printf "computing basic blocks..."
+      Printf.printfn "computing basic blocks... "
       let basicBlocks = computeBasicBlocks rootInsAddr basicCFG
       Printf.printfn "basic blocks: %d" <| List.length basicBlocks
       // List.iter (fun bb -> Printf.printfn "=====\n%s\n====="  <| (getBasicBlockLabel insMap bb)) basicBlocks
