@@ -248,18 +248,43 @@ let computeInstructionStaticMap<'TAddress when 'TAddress : unmanaged and 'TAddre
   //     insList := trIns :: !insList
   // List.rev !insList
 
-let constructCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traces:ResizeTrace<'TAddress> list) =
-  let cfgEdges = ref []
-  List.iter (fun trace ->
-             let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
-             for trEdge in allEdges do
-             if not <| List.exists (fun edge ->
-                                    (fst edge).Address = (fst trEdge).Address &&
-                                    (snd edge).Address = (snd trEdge).Address) !cfgEdges then
-               cfgEdges := trEdge :: !cfgEdges) traces
-  let cfg_short_edges = List.map (fun (fromVertex, toVertex) ->
-                                  QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !cfgEdges
-  QuickGraph.GraphExtensions.ToBidirectionalGraph cfg_short_edges
+let constructSimpleCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traces:DynamicTrace<'TAddress> list) =
+  // let mutable allVertexPairs = []
+  let allVertexPairs = ResizeArray<_>()
+  for trace in traces do
+    let traceVertexPairs = Seq.pairwise <| ResizeArray.toSeq trace
+    for vertexPair in traceVertexPairs do
+      if not <| Seq.exists (fun edge -> edge = vertexPair) allVertexPairs then
+        // allVertexPairs <- vertexPair :: allVertexPairs
+        allVertexPairs.Add vertexPair
+  let basicEdges = Seq.map (fun (fromAddr, toAddr) -> QuickGraph.SEdge(fromAddr, toAddr)) allVertexPairs
+  QuickGraph.GraphExtensions.ToBidirectionalGraph basicEdges
+  // List.iter (fun trace ->
+  //            let allEdges = Seq.pairwise <| ResizeArray.toSeq trace
+  //            for trEdge in allEdges do
+  //              if not <| List.exists (fun edge ->
+  //                                     (fst edge).Address = (fst trEdge).Address &&
+  //                                     (snd edge).Address = (snd trEdge).Address) !vertexPairs then
+  //               vertexPairs := trEdge :: !vertexPairs) traces
+  // let cfg_short_edges = List.map (fun (fromVertex, toVertex) ->
+  //                                 QuickGraph.SEdge(fromVertex.Address, toVertex.Address)) !vertexPairs
+  // QuickGraph.GraphExtensions.ToBidirectionalGraph cfg_short_edges
+
+type SimpleDotEngine() =
+  interface QuickGraph.Graphviz.IDotEngine with
+    member this.Run (imgType:QuickGraph.Graphviz.Dot.GraphvizImageType, dotString:string, outputFilename:string) =
+      System.IO.File.WriteAllText(outputFilename, dotString)
+      outputFilename
+
+let printSimpleCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insMap : InstructionMap<'TAddress>) (simpleCFG : SimpleCFG<'TAddress>) outputFilename =
+  let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(simpleCFG)
+  graphvizFormat.FormatVertex.Add(fun args ->
+                                  let insAddr = args.Vertex
+                                  args.VertexFormatter.Label <- Printf.sprintf "%s  %s"  (hexStringOfValue insAddr) (insMap.[insAddr]).Mnemonic
+                                  args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
+                                  args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box
+                                  args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded)
+  graphvizFormat.Generate(new SimpleDotEngine(), outputFilename) |> ignore
 
 let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
   let instLinearList = ref []
@@ -267,44 +292,57 @@ let computeLinearList<'TAddress when 'TAddress : unmanaged and 'TAddress : compa
   dfsAlgo.SetRootVertex(startInsAddr)
   dfsAlgo.add_DiscoverVertex(fun vertex -> instLinearList := vertex :: !instLinearList)
   dfsAlgo.Compute()
+  Printf.printfn "linear list: %d instructions" <| List.length !instLinearList
   List.rev !instLinearList
 
 let addInsToBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insAddr : 'TAddress) (basicBlock : BasicBlock<'TAddress> byref) =
  if not <| List.contains insAddr basicBlock then
     basicBlock <- insAddr :: basicBlock
 
-let saveBasicBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (basicBlocks : BasicBlock<'TAddress> list byref) =
+let saveBasicBlock<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress> byref) (basicBlocks : BasicBlock<'TAddress> list byref) =
   basicBlocks <- (List.rev basicBlock) :: basicBlocks
+  basicBlock <- []
 
 let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startInsAddr:'TAddress) (cfg:SimpleCFG<'TAddress>) =
-  let mutable bBs = []
-  let mutable currentBb = []
-  let linearList = computeLinearList startInsAddr cfg
-  for insAddr in linearList do
-    if List.isEmpty currentBb then currentBb <- [insAddr]
-    if cfg.InDegree(insAddr) = 1 then
-      // currentBb := addInsToBlock insAddr !currentBb
-      addInsToBlock insAddr &currentBb
-      if cfg.OutDegree(insAddr) <> 1 then
-        // bBs <- (List.rev currentBb) :: bBs
-        saveBasicBlock currentBb &bBs
-        currentBb <- []
-    else
-      bBs <- currentBb :: bBs
-      currentBb <- [insAddr]
-      if cfg.OutDegree(insAddr) > 1 then
-        // bBs <- (List.rev currentBb) :: bBs
-        saveBasicBlock currentBb &bBs
-        currentBb <- []
-  bBs
+  let mutable allBasicBlocks = []
+  let mutable currentBlock = [startInsAddr]
+  match computeLinearList startInsAddr cfg with
+    | _::linearList ->
+      // Printf.printfn "start linear list"
+      // List.iter (hexStringOfValue >> Printf.printfn "%s") linearList
+      // Printf.printfn "end linear list"
+      for insAddr in linearList do
+        if List.isEmpty currentBlock then currentBlock <- [insAddr]
+        else
+          let prevInsAddr = List.head currentBlock
+          if cfg.ContainsEdge(prevInsAddr, insAddr) && cfg.InDegree(insAddr) = 1 then
+            currentBlock <- insAddr :: currentBlock
+          else
+            saveBasicBlock &currentBlock &allBasicBlocks
+            currentBlock <- [insAddr]
+
+        if cfg.OutDegree(insAddr) > 1 then saveBasicBlock &currentBlock &allBasicBlocks
+
+        //   if cfg.OutDegree(insAddr) <> 1 then
+        //     saveBasicBlock &currentBb &bBs
+        // else
+        //   saveBasicBlock &currentBb &bBs
+        //   currentBb <- [insAddr]
+        //   if cfg.OutDegree(insAddr) > 1 then
+        //     saveBasicBlock &currentBb &bBs
+      // List.rev bBs
+    | _ -> failwith "empty DFS traversing path"
+  allBasicBlocks
 
 let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (cfg:SimpleCFG<'TAddress>) =
-  let lastVertex = List.reduce (fun f s -> s) basicBlock
-  let outEdges = cfg.OutEdges(lastVertex)
-  let mutable outVertices = []
-  for edge in outEdges do
-    outVertices <- edge.Target :: outVertices
-  outVertices
+  let lastVertex = List.reduce (fun _ s -> s) basicBlock
+  let outEdges = Seq.toList <| cfg.OutEdges(lastVertex)
+  List.map (fun (edge:QuickGraph.SEdge<'TAddress>) -> edge.Target) outEdges
+  // let mutable outVertices = []
+  // for edge in outEdges do
+  //   outVertices <- edge.Target :: outVertices
+  // // List.iter (fun addr -> Printf.printfn "%s -> %s" (hexStringOfValue lastVertex) (hexStringOfValue addr)) outVertices
+  // outVertices
 
 let getSimpleSourceVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock : BasicBlock<'TAddress>) (cfg : SimpleCFG<'TAddress>) =
   let firstVertex = List.head basicBlock
@@ -315,13 +353,14 @@ let getSimpleSourceVertices<'TAddress when 'TAddress : unmanaged and 'TAddress :
   inVertices
 
 let constructBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlocks : BasicBlock<'TAddress> list) (cfg : SimpleCFG<'TAddress>) =
-  let mutable basicBlockPairs = []
+  // let mutable basicBlockPairs = []
+  let basicBlockPairs = ResizeArray<_>()
   for srcBb in basicBlocks do
     for dstBb in basicBlocks do
       let simpleOutVertices = getSimpleDestinationVertices srcBb cfg
       if List.contains (List.head dstBb) simpleOutVertices then
-        basicBlockPairs <- (srcBb, dstBb) :: basicBlockPairs
-  let basicBlocksEdges = List.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) basicBlockPairs
+        basicBlockPairs.Add (srcBb, dstBb)
+  let basicBlocksEdges = Seq.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) (Seq.distinct basicBlockPairs)
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlocksEdges
 
 let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (insAddr : 'TAddress) =
@@ -332,11 +371,11 @@ let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : com
   //   | _ -> failwith "unknown type parameter"
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
-  let basicBlockLabel = ref ""
-  List.iter (fun insAddr ->
-             basicBlockLabel := (Printf.sprintf "%s\l" <|
-                                 stringOfInstruction staticInss insAddr) + !basicBlockLabel) basicBlock
-  !basicBlockLabel
+  List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
+  // let mutable basicBlockStr = ""
+  // for insAddr in basicBlock do
+  //   basicBlockStr <- basicBlockStr + (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)
+  // basicBlockStr
 
 type BasicBlockDotEngine() =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -349,6 +388,7 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
   graphvizFormat.FormatVertex.Add(fun args ->
                                   let basicBlock = args.Vertex
                                   args.VertexFormatter.Label <- getBasicBlockLabel staticInss basicBlock
+                                  args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                   args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box
                                   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded)
   graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename) |> ignore
@@ -427,11 +467,6 @@ let filterRightBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddres
       | TraceRangeFilterStates.AfterStop -> ()
       | _ -> failwith "invalid filter state"
 
-let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (callInsAddr:'TAddress) (staticInsMap:InstructionMap<'TAddress>) (trace:DynamicTrace<'TAddress>) =
-  let callIns = staticInsMap.[callInsAddr]
-  let nextInsAddr = callIns.NextAddress
-  removeOpenInterval (callInsAddr, nextInsAddr) trace
-
 // remove all instructions in (-inf, pivot]
 let removeRightBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (pivotAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
   let filteredTrace = DynamicTrace<'TAddress>()
@@ -452,6 +487,11 @@ let removeLeftBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress
     if not pivotReached then filteredTrace.Add insAddr
   filteredTrace
 
+// filter all instructions of a "standard" call
+let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (callInsAddr:'TAddress) (staticInsMap:InstructionMap<'TAddress>) (trace:DynamicTrace<'TAddress>) =
+  let callIns = staticInsMap.[callInsAddr]
+  let nextInsAddr = callIns.NextAddress
+  removeOpenInterval (callInsAddr, nextInsAddr) trace
 
 (*=====================================================================================================================*)
 
@@ -464,22 +504,42 @@ let main argv =
     let timer = new System.Diagnostics.Stopwatch()
     timer.Start()
     use traceFileReader = new System.IO.BinaryReader(System.IO.File.OpenRead(argv.[0]))
-    let (addrint_size, bool_size, threadid_size) = parseTraceHeader traceFileReader
-    Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrint_size bool_size threadid_size
-    if addrint_size = (byte 8) then
+    let (addrIntSize, boolSize, threadIdSize) = parseTraceHeader traceFileReader
+    Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrIntSize boolSize threadIdSize
+    if addrIntSize = (byte 8) then
       let (insMap, insTrace) = deserializeDynamicTrace<uint64> traceFileReader
       // printDynamicTrace insMap insTrace
-      Printf.printfn "%d instruction parsed" (Seq.length insTrace)
-      let mutable filteredTrace = selectBoundedInterval<uint64> (0x4004f0UL, 0x400501UL) insTrace
-      filteredTrace <- filterStandardCall<uint64> 0x4004f9UL insMap filteredTrace
-      // ignore filteredTrace
-      printDynamicTrace insMap filteredTrace
+      Printf.printfn "parsed instructions: %d" (Seq.length insTrace)
+      // let filteredTrace = selectBoundedInterval<uint64> (0x4004f0UL, 0x400501UL) insTrace
+      let filteredTrace = insTrace
+      Printf.printfn "trace length: %d" <| Seq.length filteredTrace
+      // printDynamicTrace insMap filteredTrace
+      let rootInsAddr = Seq.head filteredTrace
+      Printf.printfn "root address: 0x%x" rootInsAddr
+      Printf.printf "constructing simple CFG..."
+      let basicCFG = constructSimpleCfgFromTraces<uint64> [filteredTrace]
+      Printf.printfn " done."
+      // printSimpleCfg insMap basicCFG "hello_simple.dot"
+      Printf.printf "computing basic blocks..."
+      let basicBlocks = computeBasicBlocks rootInsAddr basicCFG
+      Printf.printfn "basic blocks: %d" <| List.length basicBlocks
+      // List.iter (fun bb -> Printf.printfn "=====\n%s\n====="  <| (getBasicBlockLabel insMap bb)) basicBlocks
+      // for bb in basicBlocks do
+      //   Printf.printfn "start block"
+      //   for insAddr in bb do
+      //     Printf.printfn "%s" <| hexStringOfValue insAddr
+      //   Printf.printfn "end block"
+      let basicBlockCFG = constructBasicBlockCfg basicBlocks basicCFG
+      printBasicBlockCfg insMap basicBlockCFG "hello.dot"
+      // filteredTrace <- filterStandardCall<uint64> 0x4004f9UL insMap filteredTrace
+      // // ignore filteredTrace
+      // printDynamicTrace insMap filteredTrace
       // deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
       // let trace_length = getTraceLength<uint64> traceFileReader
       // Printf.printfn "number of serialized instructions: %d" trace_length
     else
       // deserializeTrace<uint32> traceFileReader |> printTrace<uint32>
       let trace_length = getTraceLength<uint32> traceFileReader
-      Printf.printfn "number of serialized instructions: %d" trace_length
+      Printf.printfn "serialized instructions: %d" trace_length
     Printf.printfn "elapsed time: %i ms" timer.ElapsedMilliseconds
     1
