@@ -470,12 +470,14 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
   delete [] buffer;
 
   // reset serialized instruction
+  delete current_instruction_at_thread[thread_id];
   current_instruction_at_thread[thread_id] = 0;
 
   // compare with maximal length (0 = no limit)
   current_trace_length++;
   if (current_trace_length % 500000 == 0) std::cout << "traced instructions: " << current_trace_length 
                                                     << " (cached: " << cached_instruction_at_address.size() << ")"  << std::endl;
+  output_file.flush(); // just for safe
   if (current_trace_length >= max_trace_length && max_trace_length != 0) {
     PIN_ExitApplication(1);
   }
