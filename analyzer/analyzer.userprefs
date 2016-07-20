@@ -2,17 +2,8 @@
   <MonoDevelop.Ide.Workspace ActiveConfiguration="Release|x64" />
   <MonoDevelop.Ide.Workbench ActiveDocument="Program.fs">
     <Files>
-      <File FileName="Program.fs" Line="179" Column="25" />
+      <File FileName="Program.fs" Line="10" Column="100" />
     </Files>
-    <Pads>
-      <Pad Id="ProjectPad">
-        <State name="__root__">
-          <Node name="analyzer" expanded="True">
-            <Node name="analyzer" expanded="True" />
-          </Node>
-        </State>
-      </Pad>
-    </Pads>
   </MonoDevelop.Ide.Workbench>
   <MonoDevelop.Ide.DebuggingService.Breakpoints>
     <BreakpointStore />

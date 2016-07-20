@@ -21,6 +21,12 @@ let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
     | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
     | _ -> failwith "unknown type parameter"
 
+let decStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
+  match box insAddr with
+    | :? uint32 as uint32Addr -> Printf.sprintf "%u" uint32Addr
+    | :? uint64 as uint64Addr -> Printf.sprintf "%u" uint64Addr
+    | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -190,7 +196,7 @@ let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress :
     let threadId = traceFileReader.ReadUInt32 ()
     insDynamicTrace.Add address
     insNum <- insNum + 1ul
-    if insNum % 5000ul = 0ul then Printf.printf "."
+    if insNum % 50000ul = 0ul then Printf.printf "."
     if not <| Map.containsKey address insStaticMap then
       insStaticMap <- Map.add address { Address = address;
                                         NextAddress = nextAddress;
@@ -389,7 +395,7 @@ type BasicBlockDotEngine() =
       System.IO.File.WriteAllText(outputFilename, dotString)
       outputFilename
 
-let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilename =
+let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insMap : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilename =
   let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(bbCFG)
   graphvizFormat.FormatVertex.Add(fun args ->
                                   let basicBlock = args.Vertex
@@ -408,11 +414,38 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
                                   // else
                                   //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
                                   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
-                                  args.VertexFormatter.Label <- getBasicBlockLabel staticInss basicBlock
+                                  args.VertexFormatter.Label <- getBasicBlockLabel insMap basicBlock
                                   args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                   args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box
                                   )
   graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename) |> ignore
+
+(*=====================================================================================================================*)
+
+let printInstructionCountHistogram<'TAddress when 'TAddress : comparison> (trace : DynamicTrace<'TAddress>) (outputFilename : string) =
+  use outputStream = new System.IO.StreamWriter(outputFilename, false)
+  let mutable distinguishedAddrs = []
+  let mutable insCount = 0ul
+  let mutable distinguishedInsCount = 0ul
+  for insAddr in trace do
+    if insCount % 2000ul = 0ul then
+      outputStream.WriteLine(Printf.sprintf "%u\t%u" insCount distinguishedInsCount)
+    insCount <- insCount + 1ul
+
+    if not <| List.contains insAddr distinguishedAddrs then
+      distinguishedAddrs <- insAddr :: distinguishedAddrs
+      distinguishedInsCount <- distinguishedInsCount + 1ul
+
+let printInstructionHistogram<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace : DynamicTrace<'TAddress>) (outputFilename : string) =
+  let outputStream = new System.IO.StreamWriter(outputFilename, false)
+  let insHistogram = new System.Collections.Generic.Dictionary<'TAddress, uint32>()
+  for insAddr in trace do
+    if insHistogram.ContainsKey(insAddr) then
+      insHistogram.Item(insAddr) <- insHistogram.Item(insAddr) + 1ul
+    else
+      insHistogram.Add(insAddr, 1ul)
+  for Operators.KeyValue(insAddr, insCount) in insHistogram do
+    outputStream.WriteLine(Printf.sprintf "%s\t%u" (hexStringOfValue(insAddr)) insCount)
 
 (*=====================================================================================================================*)
 
@@ -518,7 +551,7 @@ let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
 
 [<EntryPoint>]
 let main argv =
-  if Array.length argv <> 2 then
+  if Array.length argv < 1 then
     Printf.printfn "give a serialized trace file from the command line and an output file (e.g. analyzer trace_file output_file)"
     0
   else
@@ -568,8 +601,10 @@ let main argv =
       Printf.printfn " done."
       Printf.printfn "parsed instructions: %d" <| Seq.length insTrace
       let filteredTrace = insTrace
-      // insTrace.Clear() // we dont need the original trace anymore (save memory in case of trace too long)
       Printf.printfn "filtered trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
+      // printInstructionCountHistogram filteredTrace argv.[1]
+      // if Array.length argv > 2 then
+      //   printInstructionHistogram filteredTrace argv.[2]
       let rootInsAddr = Seq.head filteredTrace
       Printf.printfn "root address: 0x%x" rootInsAddr
       Printf.printfn "constructing simple CFG ... "

@@ -9,7 +9,7 @@
     <ProjectGuid>{1D8315DF-68ED-43E3-B8CF-5319BB1D56AD}</ProjectGuid>
     <ProjectType />
     <OutputType>Exe</OutputType>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
     <TargetFrameworkProfile />
     <AutoGenerateBindingRedirects />
     <TargetFSharpCoreVersion />
