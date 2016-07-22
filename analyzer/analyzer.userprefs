@@ -2,7 +2,7 @@
   <MonoDevelop.Ide.Workspace ActiveConfiguration="Release|x64" />
   <MonoDevelop.Ide.Workbench ActiveDocument="Program.fs">
     <Files>
-      <File FileName="Program.fs" Line="10" Column="100" />
+      <File FileName="Program.fs" Line="12" Column="38" />
     </Files>
   </MonoDevelop.Ide.Workbench>
   <MonoDevelop.Ide.DebuggingService.Breakpoints>

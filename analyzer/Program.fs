@@ -324,16 +324,20 @@ let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
       // List.iter (hexStringOfValue >> Printf.printfn "%s") linearList
       // Printf.printfn "end linear list"
       for insAddr in linearList do
+        // Printf.printfn "addr: %s" <| hexStringOfValue insAddr
         if List.isEmpty currentBlock then currentBlock <- [insAddr]
         else
           let prevInsAddr = List.head currentBlock
           if cfg.ContainsEdge(prevInsAddr, insAddr) && cfg.InDegree(insAddr) = 1 then
             currentBlock <- insAddr :: currentBlock
           else
+            // Printf.printfn "new block"
             saveBasicBlock &currentBlock &allBasicBlocks
             currentBlock <- [insAddr]
 
-        if cfg.OutDegree(insAddr) > 1 then saveBasicBlock &currentBlock &allBasicBlocks
+        if cfg.OutDegree(insAddr) > 1 then
+          // Printf.printfn "new block"
+          saveBasicBlock &currentBlock &allBasicBlocks
 
         //   if cfg.OutDegree(insAddr) <> 1 then
         //     saveBasicBlock &currentBb &bBs
@@ -343,8 +347,10 @@ let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
         //   if cfg.OutDegree(insAddr) > 1 then
         //     saveBasicBlock &currentBb &bBs
       // List.rev bBs
+      if not <| List.isEmpty currentBlock then
+        saveBasicBlock &currentBlock &allBasicBlocks
     | _ -> failwith "empty DFS traversing path"
-  allBasicBlocks
+  List.rev allBasicBlocks
 
 let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (cfg:SimpleCFG<'TAddress>) =
   let lastVertex = List.reduce (fun _ s -> s) basicBlock
@@ -462,11 +468,14 @@ let selectBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : c
     match filterState with
       | TraceRangeFilterStates.BeforeStart ->
         if insAddr = startAddr then
+          // Printf.printfn "start address reached: %s" <| hexStringOfValue startAddr
           filterState <- TraceRangeFilterStates.BetweenStartStop
           filteredTrace.Add insAddr
       | TraceRangeFilterStates.BetweenStartStop ->
         filteredTrace.Add insAddr
-        if insAddr = stopAddr then filterState <- TraceRangeFilterStates.AfterStop
+        if insAddr = stopAddr then
+          // Printf.printfn "stop address reached: %s" <| hexStringOfValue stopAddr
+          filterState <- TraceRangeFilterStates.AfterStop
       | TraceRangeFilterStates.AfterStop -> ()
       | _ -> failwith "invalid filter state"
   filteredTrace
@@ -484,8 +493,7 @@ let removeOpenInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
         if insAddr = stopAddr then
           filterState <- TraceRangeFilterStates.AfterStop
           filteredTrace.Add insAddr
-      | TraceRangeFilterStates.AfterStop ->
-        filteredTrace.Add insAddr
+      | TraceRangeFilterStates.AfterStop -> filteredTrace.Add insAddr
       | _ -> failwith "invalid filter state"
   filteredTrace
 
@@ -600,8 +608,13 @@ let main argv =
       let (insMap, insTrace) = deserializeDynamicTrace<uint32> traceFileReader
       Printf.printfn " done."
       Printf.printfn "parsed instructions: %d" <| Seq.length insTrace
-      let filteredTrace = insTrace
+      // let filteredTrace = insTrace
+      // let mutable filteredTrace = filterStandardCall<uint32> 0x404016ul insMap insTrace
+      // filteredTrace <- filterStandardCall<uint32> 0x404022ul insMap filteredTrace
+      // filteredTrace <- selectBoundedInterval<uint32> (0x404000ul, 0x40404eul) filteredTrace
+      let mutable filteredTrace = selectBoundedInterval<uint32> (0x404276ul, 0x40428bul) insTrace
       Printf.printfn "filtered trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
+      // printDynamicTrace<uint32> insMap filteredTrace 
       // printInstructionCountHistogram filteredTrace argv.[1]
       // if Array.length argv > 2 then
       //   printInstructionHistogram filteredTrace argv.[2]
@@ -609,11 +622,18 @@ let main argv =
       Printf.printfn "root address: 0x%x" rootInsAddr
       Printf.printfn "constructing simple CFG ... "
       let basicCFG = constructSimpleCfgFromTraces<uint32> [filteredTrace]
-      filteredTrace.Clear() // we dont need the filtered trace anymore
+      // printSimpleCfg insMap basicCFG "simple.dot"
+      // filteredTrace.Clear() // we dont need the filtered trace anymore
       Printf.printfn "done."
       Printf.printfn "computing basic blocks ... "
       let basicBlocks = computeBasicBlocks rootInsAddr basicCFG
       Printf.printfn "basic blocks: %d" <| List.length basicBlocks
+      // List.iter (fun bb -> Printf.printfn "=====\n%s\n====="  <| (getBasicBlockLabel insMap bb)) basicBlocks
+      // for bb in basicBlocks do
+      //   Printf.printfn "start block"
+      //   for insAddr in bb do
+      //     Printf.printfn "%s" <| hexStringOfValue insAddr
+      //   Printf.printfn "end block"
       Printf.printfn "done."
       Printf.printfn "constructing basic block CFG ..."
       let basicBlockCFG = constructBasicBlockCfg basicBlocks basicCFG
