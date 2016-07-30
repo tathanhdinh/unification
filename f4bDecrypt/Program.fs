@@ -8,19 +8,19 @@ type ControlFlow =
   | DynamicFlow of Flag * bool
 
 type LowVmInstruction =
-  { bit_address : uint32;
+  { bitAddress : uint32;
     data : uint32;
-    prefix_value : byte;
-    packed_operands_size : byte;
-    suffix_size : byte }
+    prefixValue : byte;
+    packedOperandSize : byte;
+    suffixSize : byte }
 
 [<StructAttribute>]
-type RopEntry(address : uint32, length : byte, flag : byte, nextAddress : uint32, transition_address : uint32) =
+type RopEntry(address : uint32, length : byte, flag : byte, nextAddress : uint32, transitionAddress : uint32) =
   member this.Address = address
   member this.Length = length
   member this.Flag = flag
   member this.NextAddress = nextAddress
-  member this.TransitionAddress = transition_address
+  member this.TransitionAddress = transitionAddress
   override this.ToString() =
     Printf.sprintf "[0x%x, %d, %d, 0x%x, 0x%x]" this.Address this.Length this.Flag this.NextAddress this.TransitionAddress
 
@@ -28,19 +28,31 @@ let parseRopEntries (binReader : System.IO.BinaryReader) (asmReader : AsmResolve
   let imgBase = asmReader.NtHeaders.OptionalHeader.ImageBase
   let beginOffset = asmReader.RvaToFileOffset <| int64 (0x404309UL - imgBase)
   let endOffset = asmReader.RvaToFileOffset <| int64 (0x4046b1UL - imgBase)
-  let mutable ropEntries = []
+  // let mutable ropEntries = []
+  let ropEntries = new ResizeArray<_>()
   let mutable entryOffset = beginOffset
   while entryOffset < endOffset do
-    ignore <| binReader.BaseStream.Seek(entryOffset, System.IO.SeekOrigin.Begin)
+    binReader.BaseStream.Seek(entryOffset, System.IO.SeekOrigin.Begin) |> ignore
     let ropAddr = binReader.ReadUInt32()
     let ropLen = binReader.ReadByte()
     let ropFlag = binReader.ReadByte()
     let ropNextAddr = binReader.ReadUInt32()
     let ropTransAddr = (uint32 imgBase) + (uint32 <| asmReader.FileOffsetToRva(entryOffset + 0xaL))
     let entry = RopEntry(ropAddr, ropLen, ropFlag, ropNextAddr, ropTransAddr)
-    ropEntries <- entry :: ropEntries
+    // ropEntries <- entry :: ropEntries
+    ropEntries.Add entry
     entryOffset <- entryOffset + (int64 ropLen)
-  List.rev ropEntries
+  Seq.toList ropEntries
+  // List.rev ropEntries
+// begin for writeup
+let calculateNewReturnAddress (retAddr:uint32) (retTable:byte[]) =
+  let mutable entryOffset = 0
+  while retAddr <> System.BitConverter.ToUInt32(retTable, entryOffset) do
+    let entryLength = retTable.[entryOffset + 4]
+    entryOffset <- entryOffset + (int entryLength)
+  uint32 (entryOffset + 10)
+
+// end for writeup
 
 // let parseRopTable (binReader : System.IO.BinaryReader) (asmReader : AsmResolver.WindowsAssembly) =
 //   let imgBase = asmReader.NtHeaders.OptionalHeader.ImageBase
@@ -58,44 +70,52 @@ let parseRopEntries (binReader : System.IO.BinaryReader) (asmReader : AsmResolve
 //     current_rop_offset := !current_rop_offset + (int64 current_rop_len)
 //   List.sort !ropAddrs |> List.distinct
 
-let parse_rop_dynamic_control_flow (bin_reader : System.IO.BinaryReader) (asm_reader : AsmResolver.WindowsAssembly) =
-  let image_base = asm_reader.NtHeaders.OptionalHeader.ImageBase
-  let begin_offset = asm_reader.RvaToFileOffset(int64 (0x404309UL - image_base))
-  let end_offset = asm_reader.RvaToFileOffset(int64 (0x4046b1UL - image_base))
+let parse_rop_dynamic_control_flow (binReader : System.IO.BinaryReader) (asmReader : AsmResolver.WindowsAssembly) =
+  let imgBase = asmReader.NtHeaders.OptionalHeader.ImageBase
+  let begin_offset = asmReader.RvaToFileOffset(int64 (0x404309UL - imgBase))
+  let end_offset = asmReader.RvaToFileOffset(int64 (0x4046b1UL - imgBase))
   let rop_cf = ref List.empty
   let current_rop_offset = ref begin_offset
   while !current_rop_offset < end_offset do
-    bin_reader.BaseStream.Seek(!current_rop_offset, System.IO.SeekOrigin.Begin) |> ignore
-    let current_rop_addr = bin_reader.ReadUInt32()
-    let current_rop_len = bin_reader.ReadByte()
-    let current_rop_flag = bin_reader.ReadByte()
-    let next_rop_addr = bin_reader.ReadUInt32()
+    binReader.BaseStream.Seek(!current_rop_offset, System.IO.SeekOrigin.Begin) |> ignore
+    let current_rop_addr = binReader.ReadUInt32()
+    let current_rop_len = binReader.ReadByte()
+    let current_rop_flag = binReader.ReadByte()
+    let next_rop_addr = binReader.ReadUInt32()
     rop_cf := (current_rop_addr, next_rop_addr) :: !rop_cf
     current_rop_offset := !current_rop_offset + (int64 current_rop_len)
   List.rev !rop_cf
 
-let parse_bound_table (bin_reader : System.IO.BinaryReader) (asm_reader : AsmResolver.WindowsAssembly) =
-  let image_base = asm_reader.NtHeaders.OptionalHeader.ImageBase
-  let begin_offset = asm_reader.RvaToFileOffset(int64 (0x40406dUL - image_base))
-  let end_offset = asm_reader.RvaToFileOffset(int64 (0x40424dUL - image_base))
-  let bound_table = ref List.empty
-  let current_entry_offset = ref begin_offset
-  bin_reader.BaseStream.Seek(!current_entry_offset, System.IO.SeekOrigin.Begin) |> ignore
-  while !current_entry_offset < end_offset do
-    let current_entry = bin_reader.ReadUInt32()
-    bound_table := current_entry :: !bound_table
-    current_entry_offset := !current_entry_offset + (int64 4)
-  List.rev !bound_table
+let extractBounds (binReader : System.IO.BinaryReader) (asmReader : AsmResolver.WindowsAssembly) =
+  let imgBase = asmReader.NtHeaders.OptionalHeader.ImageBase
+  let beginOffset = asmReader.RvaToFileOffset(int64 (0x40406dUL - imgBase))
+  let endOffset = asmReader.RvaToFileOffset(int64 (0x40424dUL - imgBase))
+  let intervalTable = new ResizeArray<_>()
+  let mutable currentEntryOffset = beginOffset
+  binReader.BaseStream.Seek(currentEntryOffset, System.IO.SeekOrigin.Begin) |> ignore
+  while currentEntryOffset < endOffset do
+    let aBound = binReader.ReadUInt32()
+    intervalTable.Add aBound
+    currentEntryOffset <- currentEntryOffset + (int64 4)
+  Seq.toList intervalTable
 
-let compute_opcode_range_map rop_addresses bound_table =
-  let lo_bounds, hi_bounds = List.foldBack (fun addr (los, his) -> addr :: his, los) bound_table ([], [])
-  let ranges = List.zip lo_bounds hi_bounds
-  let range_map = ref Map.empty
+let computeOpcodeIntervalMap ropAddresses boundTable =
+  let loBounds, hiBounds = List.foldBack (fun addr (los, his) -> addr :: his, los) boundTable ([], [])
+  let intervals = List.zip loBounds hiBounds
+  // let mutable rangeMap = Map.empty
+  let intervalMap = new System.Collections.Generic.Dictionary<_, _>()
   List.iter (fun addr ->
-    match List.tryFind (fun range -> (fst range <= addr && addr <= snd range)) ranges with
-    | Some range -> range_map := Map.add addr range !range_map
-    | None -> ()) rop_addresses
-  !range_map
+    match List.tryFind (fun interval -> (fst interval <= addr && addr <= snd interval)) intervals with
+    | Some range -> intervalMap.Add(addr, range)
+    | None -> ()) ropAddresses
+  intervalMap
+
+// begin for writeup
+let calculateOpcodeInterval retAddr intervalTable =
+  let loBounds, hiBounds = List.foldBack (fun addr (los, his) -> addr :: his, los) intervalTable ([], [])
+  let intervals = List.zip loBounds hiBounds
+  List.find (fun interval -> (fst interval <= retAddr && retAddr <= snd interval)) intervals
+// end for writeup
 
 let compute_opcode_intervals rop_addresses bound_table =
   let lo_bounds, hi_bounds = List.foldBack (fun addr (los, his) -> addr :: his, los) bound_table ([], [])
@@ -282,38 +302,38 @@ let decode_instruction (bin_reader : System.IO.BinaryReader) (base_address : uin
   let ins_data_with_prefix = read_vm_data bin_reader base_address ins_bit_offset
   let ins_data = ins_data_with_prefix <<< 0x2
   if (ins_data_with_prefix &&& 0xc0000000ul = 0ul) then // prefix 00
-    { bit_address = ins_bit_offset
+    { bitAddress = ins_bit_offset
       data = ins_data
-      prefix_value = 0uy
-      packed_operands_size = 16uy
-      suffix_size = 3uy }
+      prefixValue = 0uy
+      packedOperandSize = 16uy
+      suffixSize = 3uy }
   else if (ins_data_with_prefix &&& 0x80000000ul = 0ul) then // prefix 01
-    { bit_address = ins_bit_offset
+    { bitAddress = ins_bit_offset
       data = ins_data
-      prefix_value = 1uy
-      packed_operands_size = 6uy
-      suffix_size = 2uy }
+      prefixValue = 1uy
+      packedOperandSize = 6uy
+      suffixSize = 2uy }
   else if (ins_data_with_prefix &&& 0x40000000ul = 0ul) then // prefix 10
-    { bit_address = ins_bit_offset
+    { bitAddress = ins_bit_offset
       data = ins_data
-      prefix_value = 2uy
-      packed_operands_size = 3uy
-      suffix_size = 1uy }
+      prefixValue = 2uy
+      packedOperandSize = 3uy
+      suffixSize = 1uy }
   else // prefix 11
-    { bit_address = ins_bit_offset
+    { bitAddress = ins_bit_offset
       data = ins_data
-      prefix_value = 3uy
-      packed_operands_size = 6uy
-      suffix_size = 3uy }
+      prefixValue = 3uy
+      packedOperandSize = 6uy
+      suffixSize = 3uy }
 
 let rec disassemble (bin_reader : System.IO.BinaryReader) (base_address : uint32) (current_bit_addr : uint32)
         decoded_inss =
   let new_ins = decode_instruction bin_reader base_address current_bit_addr
-  if List.exists (fun (ins : LowVmInstruction) -> ins.bit_address = new_ins.bit_address) decoded_inss then decoded_inss
+  if List.exists (fun (ins : LowVmInstruction) -> ins.bitAddress = new_ins.bitAddress) decoded_inss then decoded_inss
   else
     let new_decoded_inss = new_ins :: decoded_inss
     match new_ins with
-    | { bit_address = _; data = _; prefix_value = 0uy; packed_operands_size = 16uy; suffix_size = 3uy } ->
+    | { bitAddress = _; data = _; prefixValue = 0uy; packedOperandSize = 16uy; suffixSize = 3uy } ->
       let jump_bit_addr = new_ins.data >>> 16
       let next_ins_bit_addr = current_bit_addr + 0x15ul
       if (new_ins.data &&& 0xe000ul = 0ul) then // 00|esi:16|000
@@ -330,7 +350,7 @@ let rec disassemble (bin_reader : System.IO.BinaryReader) (base_address : uint32
         disassemble bin_reader base_address (current_bit_addr + 0x15ul) new_decoded_inss
       else // 00|esi:16|(101,110,111)
         new_decoded_inss
-    | { bit_address = _; data = _; prefix_value = 1uy; packed_operands_size = 6uy; suffix_size = 2uy } ->
+    | { bitAddress = _; data = _; prefixValue = 1uy; packedOperandSize = 6uy; suffixSize = 2uy } ->
       if (new_ins.data &&& 0x3000000ul = 0ul) then // 01|esi:3|edi:3|00
         let next_ins_bit_addr = current_bit_addr + 0xaul
         disassemble bin_reader base_address next_ins_bit_addr new_decoded_inss
@@ -340,27 +360,27 @@ let rec disassemble (bin_reader : System.IO.BinaryReader) (base_address : uint32
       else // 01|edi:3|esi:3|(10,11)
         let next_instruction_bit_address = current_bit_addr + 0xaul + 0x10ul
         disassemble bin_reader base_address next_instruction_bit_address new_decoded_inss
-    | { bit_address = _; data = _; prefix_value = 2uy; packed_operands_size = 3uy; suffix_size = 1uy } ->
+    | { bitAddress = _; data = _; prefixValue = 2uy; packedOperandSize = 3uy; suffixSize = 1uy } ->
       let next_ins_bit_addr = current_bit_addr + 0x6ul
       disassemble bin_reader base_address next_ins_bit_addr new_decoded_inss
-    | { bit_address = _; data = _; prefix_value = 3uy; packed_operands_size = 6uy; suffix_size = 3uy } ->
+    | { bitAddress = _; data = _; prefixValue = 3uy; packedOperandSize = 6uy; suffixSize = 3uy } ->
       let next_ins_bit_addr = current_bit_addr + 0xbul
       disassemble bin_reader base_address next_ins_bit_addr new_decoded_inss
     | _ ->
       failwith
       <| Printf.sprintf "unknown instruction, prefix_value = %d, operand_size = %d, suffix size = %d"
-           new_ins.prefix_value new_ins.packed_operands_size new_ins.suffix_size
+           new_ins.prefixValue new_ins.packedOperandSize new_ins.suffixSize
 
 let disassemble_low_vms (bin_reader : System.IO.BinaryReader) (asm_reader : AsmResolver.WindowsAssembly) =
   let image_base = asm_reader.NtHeaders.OptionalHeader.ImageBase
   List.map (fun vm_address ->
     let vm_file_offset = asm_reader.RvaToFileOffset(int64 (uint64 vm_address - image_base))
-    List.sortBy (fun ins -> ins.bit_address) <| disassemble bin_reader (uint32 vm_file_offset) 0ul [])
+    List.sortBy (fun ins -> ins.bitAddress) <| disassemble bin_reader (uint32 vm_file_offset) 0ul [])
     [ 0x403c32ul; 0x40365bul; 0x403056ul; 0x403598ul; 0x40312dul; 0x403d88ul; 0x403000ul ]
 
 let decompile_instruction (ins : LowVmInstruction) (bin_reader : System.IO.BinaryReader) (base_address : uint32, crtn_idx : byte) =
   match ins with
-  | { bit_address = _; data = _; prefix_value = 0uy; packed_operands_size = 16uy; suffix_size = 3uy } ->
+  | { bitAddress = _; data = _; prefixValue = 0uy; packedOperandSize = 16uy; suffixSize = 3uy } ->
     let operand = ins.data >>> 16
     if (ins.data &&& 0xe000ul = 0ul) then // 00|esi:16|000
       Printf.sprintf "if (0x403654[%d] == 0x01) then goto 0x%03x" crtn_idx operand
@@ -369,34 +389,34 @@ let decompile_instruction (ins : LowVmInstruction) (bin_reader : System.IO.Binar
     else if (ins.data &&& 0xa000ul = 0ul) then // 00|esi:16|010
       Printf.sprintf "goto 0x%03x" operand
     else if (ins.data &&& 0x8000ul = 0ul) then // 00|esi:16|011
-      Printf.sprintf "if (0x403732[%d] != 0xff) then goto 0x%03x else 0x403732[%d] = 0x%02x" operand ins.bit_address operand crtn_idx
+      Printf.sprintf "if (0x403732[%d] != 0xff) then goto 0x%03x else 0x403732[%d] = 0x%02x" operand ins.bitAddress operand crtn_idx
     else if (ins.data &&& 0x6000ul = 0ul) then // 00|esi:16|100
-      Printf.sprintf "if (0x403732[%d] != 0x%02x) then goto 0x%03x else 0x403732[%d] = 0xff" operand crtn_idx ins.bit_address operand
+      Printf.sprintf "if (0x403732[%d] != 0x%02x) then goto 0x%03x else 0x403732[%d] = 0xff" operand crtn_idx ins.bitAddress operand
     else Printf.sprintf "check_password(0x403832)"
-  | { bit_address = _; data = _; prefix_value = 1uy; packed_operands_size = 6uy; suffix_size = 2uy } ->
+  | { bitAddress = _; data = _; prefixValue = 1uy; packedOperandSize = 6uy; suffixSize = 2uy } ->
     let operand0 = ins.data >>> 29
     let operand1 = (ins.data >>> 26) &&& 7ul
     if (ins.data &&& 0x3000000ul = 0ul) then // 01|esi:3|edi:3|00
       Printf.sprintf "0x403ca8[%d][%d] = 0x403ca8[%d][%d]" crtn_idx operand0 crtn_idx operand1
     else if (ins.data &&& 0x2000000ul = 0ul) then // 01|esi:3|edi:3|01
-      let local_operand0 = (read_vm_data bin_reader base_address (ins.bit_address + 10ul)) &&& 0xffff0000ul
-      let local_operand1 = (read_vm_data bin_reader base_address (ins.bit_address + 10ul + 16ul)) >>> 16
+      let local_operand0 = (read_vm_data bin_reader base_address (ins.bitAddress + 10ul)) &&& 0xffff0000ul
+      let local_operand1 = (read_vm_data bin_reader base_address (ins.bitAddress + 10ul + 16ul)) >>> 16
       Printf.sprintf "0x403ca8[%d][%d] = 0x%08x" crtn_idx operand0 (local_operand0 ||| local_operand1)
     else if (ins.data &&& 0x1000000ul = 0ul) then // 01|esi:3|edi:3|10
       let operand1 = (ins.data >>> 26) &&& 7ul
-      let local_operand = (read_vm_data bin_reader base_address (ins.bit_address + 10ul)) >>> 16
-      Printf.sprintf "if (0x403732[%d] == 0x%02x) then password[%d] = 0x403ca8[%d][%d] else goto 0x%03x" local_operand crtn_idx local_operand crtn_idx operand1 ins.bit_address
+      let local_operand = (read_vm_data bin_reader base_address (ins.bitAddress + 10ul)) >>> 16
+      Printf.sprintf "if (0x403732[%d] == 0x%02x) then password[%d] = 0x403ca8[%d][%d] else goto 0x%03x" local_operand crtn_idx local_operand crtn_idx operand1 ins.bitAddress
     else // 01|esi:3|edi:3|11
       let operand0 = ins.data >>> 29
-      let local_operand = (read_vm_data bin_reader base_address (ins.bit_address + 10ul)) >>> 16
-      Printf.sprintf "if (0x403732[%d] == 0x%02x) then 0x403ca8[%d][%d] = password[%d] else goto 0x%03x" local_operand crtn_idx crtn_idx operand0 local_operand ins.bit_address
-  | { bit_address = _; data = _; prefix_value = 2uy; packed_operands_size = 3uy; suffix_size = 1uy } ->
+      let local_operand = (read_vm_data bin_reader base_address (ins.bitAddress + 10ul)) >>> 16
+      Printf.sprintf "if (0x403732[%d] == 0x%02x) then 0x403ca8[%d][%d] = password[%d] else goto 0x%03x" local_operand crtn_idx crtn_idx operand0 local_operand ins.bitAddress
+  | { bitAddress = _; data = _; prefixValue = 2uy; packedOperandSize = 3uy; suffixSize = 1uy } ->
     let operand = ins.data >>> 29
     if (ins.data &&& 0x10000000ul = 0ul) then // 10|eax:3|0
       Printf.sprintf "0x403ca8[%d][%d] = reverse32(0x403ca8[%d][%d])" crtn_idx operand crtn_idx operand
     else // 10|eax:3|1
       Printf.sprintf "tmp_ecx = ++0x403832[%d][0]; 0x403832[%d][tmp_ecx] = 0x403ca8[%d][%d]" crtn_idx crtn_idx crtn_idx operand
-  | { bit_address = _; data = _; prefix_value = 3uy; packed_operands_size = 6uy; suffix_size = 3uy } ->
+  | { bitAddress = _; data = _; prefixValue = 3uy; packedOperandSize = 6uy; suffixSize = 3uy } ->
     let operand0 = ins.data >>> 29
     let operand1 = (ins.data >>> 26) &&& 7ul
     if (ins.data &&& 0x3800000ul = 0ul) then // 11|esi:3|edi:3|000
@@ -414,13 +434,13 @@ let decompile_instruction (ins : LowVmInstruction) (bin_reader : System.IO.Binar
     else if (ins.data &&& 0x1000000ul = 0ul) then // 11|esi:3|edi:3|101
       Printf.sprintf "0x403654[%d] = (0x403ca8[%d][%d] == 0x403ca8[%d][%d])" crtn_idx crtn_idx operand0 crtn_idx operand1
     else // 11|esi:3|edi:3|(110,111)
-      Printf.sprintf "if (%d < 0x403832[%d][0]) then 0x403ca8[%d][0] = 0x403832[%d][%d] else goto 0x%03x" operand1 operand0 crtn_idx operand0 (operand1 + 1ul) ins.bit_address
+      Printf.sprintf "if (%d < 0x403832[%d][0]) then 0x403ca8[%d][0] = 0x403832[%d][%d] else goto 0x%03x" operand1 operand0 crtn_idx operand0 (operand1 + 1ul) ins.bitAddress
   | _ -> Printf.sprintf "not decompiled yet"
 
 let decompile_low_vm (bin_reader : System.IO.BinaryReader) (asm_reader : AsmResolver.WindowsAssembly) (vm_rva : uint32, crtn_idx : byte) =
   let image_base = asm_reader.NtHeaders.OptionalHeader.ImageBase
   let vm_file_offset = uint32 <| asm_reader.RvaToFileOffset(int64 (uint64 vm_rva - image_base))
-  let vm_inss = List.sortBy (fun ins -> ins.bit_address) <| disassemble bin_reader (uint32 vm_file_offset) 0ul []
+  let vm_inss = List.sortBy (fun ins -> ins.bitAddress) <| disassemble bin_reader (uint32 vm_file_offset) 0ul []
   List.map (fun ins -> (ins, decompile_instruction ins bin_reader (vm_file_offset, crtn_idx))) vm_inss
 
 let context = new Microsoft.Z3.Context()
@@ -806,7 +826,7 @@ let decrypt_f4xorwkfu binary_path =
   use bin_reader = new System.IO.BinaryReader(System.IO.File.OpenRead(binary_path))
   let bin_asm = AsmResolver.WindowsAssembly.FromFile(binary_path)
   //  let rop_addresses = parse_rop_table bin_reader bin_asm
-  let bound_table = parse_bound_table bin_reader bin_asm
+  let bound_table = extractBounds bin_reader bin_asm
   //  let range_map     = compute_opcode_range_map rop_addresses bound_table
   //  let rop_cf        = parse_rop_dynamic_control_flow bin_reader bin_asm
   let rop_table = parseRopEntries bin_reader bin_asm
@@ -816,7 +836,7 @@ let decrypt_f4xorwkfu binary_path =
     |> List.sort
     |> List.distinct
 
-  let range_map = compute_opcode_range_map rop_addresses bound_table
+  let range_map = computeOpcodeIntervalMap rop_addresses bound_table
   let low_vms = disassemble_low_vms bin_reader bin_asm
   //  List.iter (fun addr -> Printf.printfn "0x%x" addr) rop_addresses
   //  List.iter (fun addr -> Printf.printf "0x%x " addr) bound_table
@@ -848,9 +868,32 @@ let decrypt_f4xorwkfu binary_path =
     Printf.printfn "=========== coroutine %d ===========" !coroutine_idx
 //    Printf.printfn "crtn_idx = %d;" !coroutine_idx
     coroutine_idx := !coroutine_idx + 1
-    List.iter (fun (vm_ins, decompiled_str) -> Printf.printfn "0x%03x: %s;" vm_ins.bit_address decompiled_str)
+    List.iter (fun (vm_ins, decompiled_str) -> Printf.printfn "0x%03x: %s;" vm_ins.bitAddress decompiled_str)
       decompiled_vm) decompiled_vms
   bin_reader.Close()
+
+let printInfo () =
+  let binPath = @"F4b_XOR_W4kfu.exe"
+  use binReader = new System.IO.BinaryReader(System.IO.File.OpenRead(binPath))
+  let binAsm = AsmResolver.WindowsAssembly.FromFile(binPath)
+  let intervalTable = extractBounds binReader binAsm
+  let ropTable = parseRopEntries binReader binAsm
+
+  let ropAddrs =
+    List.map (fun (ropEntry : RopEntry) -> ropEntry.Address) ropTable
+    |> List.sort
+    |> List.distinct
+
+  let transAddrs = 
+    List.map (fun (ropEntry:RopEntry) -> ropEntry.TransitionAddress) ropTable
+    |> List.sort |> List.distinct
+
+  // List.iter (fun ropAddr -> Printf.printf "0x%x; " ropAddr) ropAddrs
+  Printf.printfn "%u" <| List.length transAddrs
+  List.iter (fun addr -> Printf.printf "0x%x; " addr) transAddrs
+
+  // let range_map = computeOpcodeIntervalMap ropAddrs intervalTable
+  // let low_vms = disassemble_low_vms binReader binAsm
 
 [<EntryPoint>]
 let main argv =
@@ -858,7 +901,8 @@ let main argv =
 //    decrypt_f4xorwkfu @"F4b_XOR_W4kfu.exe"
 //    check_password0 "password0.smt2"
 //    processing_password0 "password0.smt2"
-    process_password "password.smt2"
+    // process_password "password.smt2"
+    printInfo ()
     0
   with ex ->
     Printf.printfn "%s" <| ex.ToString()

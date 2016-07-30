@@ -389,11 +389,9 @@ let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : com
   //   | _ -> failwith "unknown type parameter"
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
-  List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
-  // let mutable basicBlockStr = ""
-  // for insAddr in basicBlock do
-  //   basicBlockStr <- basicBlockStr + (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)
-  // basicBlockStr
+  // List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
+  let labelStr = List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s<br align=\"left\"/>" <| stringOfInstruction staticInss insAddr)) basicBlock
+  Printf.sprintf "<%s>" labelStr
 
 type BasicBlockDotEngine() =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -479,6 +477,26 @@ let selectBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : c
       | TraceRangeFilterStates.AfterStop -> ()
       | _ -> failwith "invalid filter state"
   filteredTrace
+
+// select the list of all intervals [start, end]
+let selectBoundedIntervals<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let insInterval = DynamicTrace<'TAddress>()
+  let mutable selectedIntervals = []
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
+  for insAddr in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        if insAddr = startAddr then
+          insInterval.Add insAddr
+          filterState <- TraceRangeFilterStates.BetweenStartStop
+      | TraceRangeFilterStates.BetweenStartStop ->
+        insInterval.Add insAddr
+        if insAddr = stopAddr then
+          selectedIntervals <- insInterval.GetRange(0, Seq.length insInterval) :: selectedIntervals
+          insInterval.Clear()
+          filterState <- TraceRangeFilterStates.BeforeStart
+      | _ -> failwith "invalid filter state"
+  selectedIntervals
 
 // remove all instructions in (start, end)
 let removeOpenInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
@@ -609,22 +627,28 @@ let main argv =
       Printf.printfn " done."
       Printf.printfn "parsed instructions: %d" <| Seq.length insTrace
       // let filteredTrace = insTrace
-      // let mutable filteredTrace = filterStandardCall<uint32> 0x404016ul insMap insTrace
-      // filteredTrace <- filterStandardCall<uint32> 0x404022ul insMap filteredTrace
-      // filteredTrace <- selectBoundedInterval<uint32> (0x404000ul, 0x40404eul) filteredTrace
-      let mutable filteredTrace = selectBoundedInterval<uint32> (0x404276ul, 0x40428bul) insTrace
-      Printf.printfn "filtered trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
+      // let mutable filteredTrace = selectBoundedInterval<uint32> (0x40428cul, 0x4042e0ul) insTrace
+      // filteredTrace <- filterStandardCall<uint32> 0x4042c6ul insMap filteredTrace
+      // filteredTrace <- filterStandardCall<uint32> 0x4042d2ul insMap filteredTrace
+      // let mutable filteredTrace = selectBoundedInterval<uint32> (0x404276ul, 0x40428bul) insTrace
+      // Printf.printfn "filtered trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
+      let mutable filteredTraces = selectBoundedIntervals<uint32> (0x40428cul, 0x4042e0ul) insTrace
+      filteredTraces <- List.map (fun aTrace ->
+                                  ((filterStandardCall<uint32> 0x4042c6ul insMap) >> (filterStandardCall<uint32> 0x4042d2ul insMap)) aTrace) filteredTraces
+      for trace in filteredTraces do
+        Printf.printfn "trace length: %u" <| Seq.length trace
       // printDynamicTrace<uint32> insMap filteredTrace 
       // printInstructionCountHistogram filteredTrace argv.[1]
       // if Array.length argv > 2 then
       //   printInstructionHistogram filteredTrace argv.[2]
-      let rootInsAddr = Seq.head filteredTrace
-      Printf.printfn "root address: 0x%x" rootInsAddr
+      // let rootInsAddr = Seq.head filteredTrace
+      // Printf.printfn "root address: 0x%x" rootInsAddr
       Printf.printfn "constructing simple CFG ... "
-      let basicCFG = constructSimpleCfgFromTraces<uint32> [filteredTrace]
+      let basicCFG = constructSimpleCfgFromTraces<uint32> filteredTraces
       // printSimpleCfg insMap basicCFG "simple.dot"
       // filteredTrace.Clear() // we dont need the filtered trace anymore
       Printf.printfn "done."
+      let rootInsAddr = 0x40428cul
       Printf.printfn "computing basic blocks ... "
       let basicBlocks = computeBasicBlocks rootInsAddr basicCFG
       Printf.printfn "basic blocks: %d" <| List.length basicBlocks
