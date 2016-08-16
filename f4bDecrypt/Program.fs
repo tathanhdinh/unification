@@ -881,16 +881,28 @@ let printInfo () =
 
   let ropAddrs =
     List.map (fun (ropEntry : RopEntry) -> ropEntry.Address) ropTable
-    |> List.sort
-    |> List.distinct
+    |> List.sort |> List.distinct
 
-  let transAddrs = 
+  let transAddrs =
     List.map (fun (ropEntry:RopEntry) -> ropEntry.TransitionAddress) ropTable
     |> List.sort |> List.distinct
 
+  let mutable newRopAddrs =
+     List.map (fun (ropEntry:RopEntry) -> ropEntry.NextAddress) ropTable
+     |> List.sort |> List.distinct
+
+  newRopAddrs <- Set.toList (Set.difference (Set.ofList newRopAddrs) (Set.ofList ropAddrs))
+
+  // let gadgetMap = computeOpcodeIntervalMap ropAddrs intervalTable
+  let gadgetMap = computeOpcodeIntervalMap newRopAddrs intervalTable
+  for Operators.KeyValue(entryPoint, (loBound, hiBound)) in gadgetMap do
+    Printf.printf "0x%x => [0x%x, 0x%x]; " entryPoint loBound hiBound
+  // Seq.iter (fun addr (lo, hi) -> Printf.printf "0x%x => [0x%x, 0x%x]; " addr lo hi) gadgetMap
+
   // List.iter (fun ropAddr -> Printf.printf "0x%x; " ropAddr) ropAddrs
-  Printf.printfn "%u" <| List.length transAddrs
-  List.iter (fun addr -> Printf.printf "0x%x; " addr) transAddrs
+  // Printf.printfn "%u" <| List.length transAddrs
+  // List.iter (fun addr -> Printf.printf "0x%x; " addr) transAddrs
+  // List.iter (fun (entry:RopEntry) -> Printf.printf "%u; " entry.Flag) ropTable 
 
   // let range_map = computeOpcodeIntervalMap ropAddrs intervalTable
   // let low_vms = disassemble_low_vms binReader binAsm

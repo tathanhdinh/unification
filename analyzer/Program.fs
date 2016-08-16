@@ -389,9 +389,9 @@ let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : com
   //   | _ -> failwith "unknown type parameter"
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
-  // List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
-  let labelStr = List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s<br align=\"left\"/>" <| stringOfInstruction staticInss insAddr)) basicBlock
-  Printf.sprintf "<%s>" labelStr
+  List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
+  // let labelStr = List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s<br align=\"left\"/>" <| stringOfInstruction staticInss insAddr)) basicBlock
+  // Printf.sprintf "<%s>" labelStr
 
 type BasicBlockDotEngine() =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -577,7 +577,7 @@ let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
 
 [<EntryPoint>]
 let main argv =
-  if Array.length argv < 1 then
+  if Array.length argv < 2 then
     Printf.printfn "give a serialized trace file from the command line and an output file (e.g. analyzer trace_file output_file)"
     0
   else
@@ -611,7 +611,7 @@ let main argv =
       //     Printf.printfn "%s" <| hexStringOfValue insAddr
       //   Printf.printfn "end block"
       let basicBlockCFG = constructBasicBlockCfg basicBlocks basicCFG
-      printBasicBlockCfg insMap basicBlockCFG "hello.dot"
+      printBasicBlockCfg insMap basicBlockCFG argv.[1]
       // filteredTrace <- filterStandardCall<uint64> 0x4004f9UL insMap filteredTrace
       // // ignore filteredTrace
       // printDynamicTrace insMap filteredTrace

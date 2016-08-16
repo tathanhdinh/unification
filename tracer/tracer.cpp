@@ -382,8 +382,6 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
     break;
   case AfterStop:
     break;
-//  default:
-//    break;
   }
 
   if (tracing_state == BetweenStartAndStop) {
@@ -602,7 +600,7 @@ int main(int argc, char *argv[])
             << "limit length: " << max_trace_length;
   if (max_trace_length == 0) std::cout << " (no limit)";
   std::cout << std::endl
-	        << "stop address: " << StringFromAddrint(start_address);
+            << "start address: " << StringFromAddrint(start_address);
   if (start_address == 0) std::cout << " (from beginning)";
   std::cout << std::endl
 	        << "stop address: " << StringFromAddrint(stop_address);
