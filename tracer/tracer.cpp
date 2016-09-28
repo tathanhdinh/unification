@@ -462,12 +462,12 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
   ADDRINT serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
 
   // serialize size of serialized instruction: allow random access on the serialized trace
-  output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
+  /*output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
 
   UINT8 *buffer = new UINT8[serialized_length];
   current_instruction_at_thread[thread_id]->serialize(buffer);
   output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
-  delete [] buffer;
+  delete [] buffer;*/
 
   // reset serialized instruction
   delete current_instruction_at_thread[thread_id];
