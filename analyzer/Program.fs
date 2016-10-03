@@ -21,6 +21,12 @@ let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
     | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
     | _ -> failwith "unknown type parameter"
 
+let decStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
+  match box insAddr with
+    | :? uint32 as uint32Addr -> Printf.sprintf "%u" uint32Addr
+    | :? uint64 as uint64Addr -> Printf.sprintf "%u" uint64Addr
+    | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -34,8 +40,8 @@ let getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System
     | t when t = typeof<uint32> ->
       let mutable traceLength = (uint32 0)
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-        let instruction_length = traceFileReader.ReadUInt32 ()
-        traceFileReader.BaseStream.Seek (int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
+        let insLength = traceFileReader.ReadUInt32 ()
+        traceFileReader.BaseStream.Seek (int64 insLength, System.IO.SeekOrigin.Current) |> ignore
         traceLength <- traceLength + (uint32 1)
       unbox<'TAddress> traceLength
     | t when t = typeof<uint64> ->
@@ -47,21 +53,21 @@ let getTraceLength<'TAddress when 'TAddress : unmanaged> (traceFileReader:System
       unbox<'TAddress> traceLength
     | _ -> failwith "unknown type parameter"
 
-let getTraceLengthX86 (traceFileReader:System.IO.BinaryReader) =
-  let trace_length:uint32 ref = ref (uint32 0)
-  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-    let instruction_length = traceFileReader.ReadUInt32 ()
-    traceFileReader.BaseStream.Seek(int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
-    trace_length := !trace_length + (uint32 1)
-  !trace_length
+// let getTraceLengthX86 (traceFileReader:System.IO.BinaryReader) =
+//   let trace_length:uint32 ref = ref (uint32 0)
+//   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+//     let instruction_length = traceFileReader.ReadUInt32 ()
+//     traceFileReader.BaseStream.Seek(int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
+//     trace_length := !trace_length + (uint32 1)
+//   !trace_length
 
-let getTraceLengthX8664 (traceFileReader:System.IO.BinaryReader) =
- let trace_length:uint64 ref = ref (uint64 0)
- while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-   let instruction_length = traceFileReader.ReadUInt64 ()
-   traceFileReader.BaseStream.Seek(int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
-   trace_length := !trace_length + (uint64 1)
- !trace_length
+// let getTraceLengthX8664 (traceFileReader:System.IO.BinaryReader) =
+//  let trace_length:uint64 ref = ref (uint64 0)
+//  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+//    let instruction_length = traceFileReader.ReadUInt64 ()
+//    traceFileReader.BaseStream.Seek(int64 instruction_length, System.IO.SeekOrigin.Current) |> ignore
+//    trace_length := !trace_length + (uint64 1)
+//  !trace_length
 
 (*=====================================================================================================================*)
 
@@ -74,10 +80,10 @@ let deserializeOpcode<'TAddress when 'TAddress : unmanaged> (traceFileReader:Sys
   let opcodeBuffer = traceFileReader.ReadBytes opcodeSize
   opcodeBuffer
 
-let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
-  let opcode_size = traceFileReader.ReadUInt64 ()
-  let opcode_buffer = traceFileReader.ReadBytes (int opcode_size)
-  opcode_buffer
+// let deserializeOpcodeX8664 (traceFileReader:System.IO.BinaryReader) =
+//   let opcode_size = traceFileReader.ReadUInt64 ()
+//   let opcode_buffer = traceFileReader.ReadBytes (int opcode_size)
+//   opcode_buffer
   // (opcode_size, opcode_buffer)
 
 (*=====================================================================================================================*)
@@ -91,10 +97,10 @@ let deserializeMnemonic<'TAddress when 'TAddress : unmanaged> (traceFileReader:S
   let mnemonicStr = traceFileReader.ReadBytes mnemonicLength
   System.Text.Encoding.ASCII.GetString mnemonicStr
 
-let deserializeMnemonicX8664 (traceFileReader:System.IO.BinaryReader) =
-  let mnemonic_len = traceFileReader.ReadUInt64 ()
-  let mnemonic_str = traceFileReader.ReadBytes (int mnemonic_len)
-  System.Text.Encoding.ASCII.GetString mnemonic_str
+// let deserializeMnemonicX8664 (traceFileReader:System.IO.BinaryReader) =
+//   let mnemonic_len = traceFileReader.ReadUInt64 ()
+//   let mnemonic_str = traceFileReader.ReadBytes (int mnemonic_len)
+//   System.Text.Encoding.ASCII.GetString mnemonic_str
 
 (*=====================================================================================================================*)
 
@@ -107,10 +113,10 @@ let deserializeRegMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
   let regMapBuffer = traceFileReader.ReadBytes regMapLength
   regMapBuffer
 
-let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
-  let reg_map_len = traceFileReader.ReadUInt64 ()
-  let reg_map_buffer = traceFileReader.ReadBytes (int reg_map_len)
-  (reg_map_len, reg_map_buffer)
+// let deserializeRegMapX8664 (traceFileReader:System.IO.BinaryReader) =
+//   let reg_map_len = traceFileReader.ReadUInt64 ()
+//   let reg_map_buffer = traceFileReader.ReadBytes (int reg_map_len)
+//   (reg_map_len, reg_map_buffer)
 
 (*=====================================================================================================================*)
 
@@ -123,17 +129,17 @@ let deserializeMemMap<'TAddress> (traceFileReader:System.IO.BinaryReader) =
   let memMapBuffer = traceFileReader.ReadBytes memMapLength
   memMapBuffer
 
-let deserializeMemMapX8664 (traceFileReader:System.IO.BinaryReader) =
-  let mem_map_len = traceFileReader.ReadUInt64 ()
-  let mem_map_buffer = traceFileReader.ReadBytes (int mem_map_len)
-  (mem_map_len, mem_map_buffer)
+// let deserializeMemMapX8664 (traceFileReader:System.IO.BinaryReader) =
+//   let mem_map_len = traceFileReader.ReadUInt64 ()
+//   let mem_map_buffer = traceFileReader.ReadBytes (int mem_map_len)
+//   (mem_map_len, mem_map_buffer)
 
 (*=====================================================================================================================*)
 
 let deserializeTrace<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   let trace = ResizeArray<_>()
   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-    let serialized_length =
+    let serializedLength =
       match typeof<'TAddress> with
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
@@ -143,29 +149,30 @@ let deserializeTrace<'TAddress when 'TAddress : unmanaged> (traceFileReader:Syst
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
         | _ -> failwith "unknown type parameter"
-    let next_address =
+    let nextAddress =
       match typeof<'TAddress> with
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
         | _ -> failwith "unknown type parameter"
     deserializeOpcode<'TAddress> traceFileReader |> ignore
-    let mnemonic_string = deserializeMnemonic<'TAddress> traceFileReader
+    let mnemonicStr = deserializeMnemonic<'TAddress> traceFileReader
     deserializeRegMap<'TAddress> traceFileReader |> ignore
     deserializeRegMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
-    let thread_id = traceFileReader.ReadUInt32 ()
+    let threadId = traceFileReader.ReadUInt32 ()
     trace.Add { Address = address;
-                NextAddress = next_address;
-                Mnemonic = mnemonic_string;
-                ThreadId = thread_id }
+                NextAddress = nextAddress;
+                Mnemonic = mnemonicStr;
+                ThreadId = threadId }
   trace
 
 let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traceFileReader:System.IO.BinaryReader) =
   let insDynamicTrace = DynamicTrace<'TAddress>()
   let mutable insStaticMap = Map.empty
+  let mutable insNum = 0ul
   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-    let serialized_length =
+    let serializedLength =
       match typeof<'TAddress> with
         | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
         | t when t = typeof<uint64> -> traceFileReader.ReadUInt64 () |> unbox<'TAddress>
@@ -188,6 +195,8 @@ let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress :
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     let threadId = traceFileReader.ReadUInt32 ()
     insDynamicTrace.Add address
+    insNum <- insNum + 1ul
+    if insNum % 50000ul = 0ul then Printf.printf "."
     if not <| Map.containsKey address insStaticMap then
       insStaticMap <- Map.add address { Address = address;
                                         NextAddress = nextAddress;
@@ -195,25 +204,25 @@ let deserializeDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress :
                                         ThreadId = threadId } insStaticMap
   (insStaticMap, insDynamicTrace)
 
-let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
-  let trace = ResizeArray<_>()
-  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
-    let serialized_length = traceFileReader.ReadUInt64 ()
-    let address = traceFileReader.ReadUInt64 ()
-    let next_address = traceFileReader.ReadUInt64 ()
-    deserializeOpcodeX8664 traceFileReader |> ignore
-    let mnemonic_string = deserializeMnemonicX8664 traceFileReader
-    Printf.printfn "%s" mnemonic_string
-    deserializeRegMapX8664 traceFileReader |> ignore
-    deserializeRegMapX8664 traceFileReader |> ignore
-    deserializeMemMapX8664 traceFileReader |> ignore
-    deserializeMemMapX8664 traceFileReader |> ignore
-    let thread_id = traceFileReader.ReadUInt32 ()
-    trace.Add { Address = address;
-                NextAddress = next_address;
-                Mnemonic = mnemonic_string;
-                ThreadId = thread_id }
-  trace
+// let deserializeTraceX8664 (traceFileReader:System.IO.BinaryReader) =
+//   let trace = ResizeArray<_>()
+//   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+//     let serialized_length = traceFileReader.ReadUInt64 ()
+//     let address = traceFileReader.ReadUInt64 ()
+//     let next_address = traceFileReader.ReadUInt64 ()
+//     deserializeOpcodeX8664 traceFileReader |> ignore
+//     let mnemonic_string = deserializeMnemonicX8664 traceFileReader
+//     Printf.printfn "%s" mnemonic_string
+//     deserializeRegMapX8664 traceFileReader |> ignore
+//     deserializeRegMapX8664 traceFileReader |> ignore
+//     deserializeMemMapX8664 traceFileReader |> ignore
+//     deserializeMemMapX8664 traceFileReader |> ignore
+//     let thread_id = traceFileReader.ReadUInt32 ()
+//     trace.Add { Address = address;
+//                 NextAddress = next_address;
+//                 Mnemonic = mnemonic_string;
+//                 ThreadId = thread_id }
+//   trace
 
 (*=====================================================================================================================*)
 
@@ -221,18 +230,18 @@ let printDynamicTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : compa
   for insAddr in trace do
     Printf.printfn "%s  %s" (hexStringOfValue insAddr) (insMap.[insAddr]).Mnemonic
 
-let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeTrace<'TAddress>) =
-  for ins in trace do
-    match typeof<'TAddress> with
-      | t when t = typeof<uint32> -> Printf.printfn "0x%x %s" (unbox<uint32> ins.Address) ins.Mnemonic
-      | t when t = typeof<uint64> -> Printf.printfn "0x%x %s" (unbox<uint64> ins.Address) ins.Mnemonic
-      | _ -> failwith "unknown type parameter"
-  Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
+// let printTrace<'TAddress when 'TAddress : unmanaged> (trace:ResizeTrace<'TAddress>) =
+//   for ins in trace do
+//     match typeof<'TAddress> with
+//       | t when t = typeof<uint32> -> Printf.printfn "0x%x %s" (unbox<uint32> ins.Address) ins.Mnemonic
+//       | t when t = typeof<uint64> -> Printf.printfn "0x%x %s" (unbox<uint64> ins.Address) ins.Mnemonic
+//       | _ -> failwith "unknown type parameter"
+//   Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
 
-let printTraceX8664 (trace:ResizeArray<Instruction<uint64>>) =
-  for ins in trace do
-    Printf.printfn "0x%x %s" ins.Address ins.Mnemonic
-  Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
+// let printTraceX8664 (trace:ResizeArray<Instruction<uint64>>) =
+//   for ins in trace do
+//     Printf.printfn "0x%x %s" ins.Address ins.Mnemonic
+//   Printf.printfn "%u instructions parsed" (ResizeArray.length trace)
 
 (*=====================================================================================================================*)
 
@@ -253,7 +262,7 @@ let constructSimpleCfgFromTraces<'TAddress when 'TAddress : unmanaged and 'TAddr
   let allVertexPairs = ResizeArray<_>()
   for trace in traces do
     // let traceVertexPairs = Seq.pairwise <| ResizeArray.toSeq trace
-    let traceVertexPairs = (ResizeArray.toSeq >> Seq.pairwise >> Seq.distinct) trace
+    let traceVertexPairs = (Seq.pairwise >> Seq.distinct) trace
     allVertexPairs.AddRange traceVertexPairs
     // for vertexPair in traceVertexPairs do
     //   if not <| Seq.exists (fun edge -> edge = vertexPair) allVertexPairs then
@@ -315,16 +324,20 @@ let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
       // List.iter (hexStringOfValue >> Printf.printfn "%s") linearList
       // Printf.printfn "end linear list"
       for insAddr in linearList do
+        // Printf.printfn "addr: %s" <| hexStringOfValue insAddr
         if List.isEmpty currentBlock then currentBlock <- [insAddr]
         else
           let prevInsAddr = List.head currentBlock
           if cfg.ContainsEdge(prevInsAddr, insAddr) && cfg.InDegree(insAddr) = 1 then
             currentBlock <- insAddr :: currentBlock
           else
+            // Printf.printfn "new block"
             saveBasicBlock &currentBlock &allBasicBlocks
             currentBlock <- [insAddr]
 
-        if cfg.OutDegree(insAddr) > 1 then saveBasicBlock &currentBlock &allBasicBlocks
+        if cfg.OutDegree(insAddr) > 1 then
+          // Printf.printfn "new block"
+          saveBasicBlock &currentBlock &allBasicBlocks
 
         //   if cfg.OutDegree(insAddr) <> 1 then
         //     saveBasicBlock &currentBb &bBs
@@ -334,8 +347,10 @@ let computeBasicBlocks<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
         //   if cfg.OutDegree(insAddr) > 1 then
         //     saveBasicBlock &currentBb &bBs
       // List.rev bBs
+      if not <| List.isEmpty currentBlock then
+        saveBasicBlock &currentBlock &allBasicBlocks
     | _ -> failwith "empty DFS traversing path"
-  allBasicBlocks
+  List.rev allBasicBlocks
 
 let getSimpleDestinationVertices<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (cfg:SimpleCFG<'TAddress>) =
   let lastVertex = List.reduce (fun _ s -> s) basicBlock
@@ -375,10 +390,8 @@ let stringOfInstruction<'TAddress when 'TAddress : unmanaged and 'TAddress : com
 
 let getBasicBlockLabel<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (basicBlock : BasicBlock<'TAddress>) =
   List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)) basicBlock
-  // let mutable basicBlockStr = ""
-  // for insAddr in basicBlock do
-  //   basicBlockStr <- basicBlockStr + (Printf.sprintf "%s\l" <| stringOfInstruction staticInss insAddr)
-  // basicBlockStr
+  // let labelStr = List.fold (+) "" <| List.map (fun insAddr -> (Printf.sprintf "%s<br align=\"left\"/>" <| stringOfInstruction staticInss insAddr)) basicBlock
+  // Printf.sprintf "<%s>" labelStr
 
 type BasicBlockDotEngine() =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -386,15 +399,57 @@ type BasicBlockDotEngine() =
       System.IO.File.WriteAllText(outputFilename, dotString)
       outputFilename
 
-let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (staticInss : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilename =
+let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (insMap : InstructionMap<'TAddress>) (bbCFG : BasicBlockCFG<'TAddress>) outputFilename =
   let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(bbCFG)
   graphvizFormat.FormatVertex.Add(fun args ->
                                   let basicBlock = args.Vertex
-                                  args.VertexFormatter.Label <- getBasicBlockLabel staticInss basicBlock
+                                  // if bbCFG.InDegree(basicBlock) = 0 then
+                                  //   args.VertexFormatter.FillColor <- QuickGraph.Graphviz.Dot.GraphvizColor(255uy, 101uy, 156uy, 239uy) // cornflowerblue
+                                  //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled
+                                  // else if bbCFG.OutDegree(basicBlock) = 0 then
+                                  //   args.VertexFormatter.FillColor <- QuickGraph.Graphviz.Dot.GraphvizColor(255uy, 220uy, 220uy, 220uy) // gainsboro
+                                  //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled
+                                  // else if bbCFG.InDegree(basicBlock) > 2 then
+                                  //   args.VertexFormatter.FillColor <- QuickGraph.Graphviz.Dot.GraphvizColor(255uy, 191uy, 62uy, 255uy)  // darkorchid1
+                                  //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled
+                                  // else if bbCFG.OutDegree(basicBlock) > 2 then
+                                  //   args.VertexFormatter.FillColor <- QuickGraph.Graphviz.Dot.GraphvizColor(255uy, 255uy, 185uy, 15uy)  // darkgoldenrod1
+                                  //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled
+                                  // else
+                                  //   args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
+                                  args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
+                                  args.VertexFormatter.Label <- getBasicBlockLabel insMap basicBlock
                                   args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                   args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box
-                                  args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded)
+                                  )
   graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename) |> ignore
+
+(*=====================================================================================================================*)
+
+let printInstructionCountHistogram<'TAddress when 'TAddress : comparison> (trace : DynamicTrace<'TAddress>) (outputFilename : string) =
+  use outputStream = new System.IO.StreamWriter(outputFilename, false)
+  let mutable distinguishedAddrs = []
+  let mutable insCount = 0ul
+  let mutable distinguishedInsCount = 0ul
+  for insAddr in trace do
+    if insCount % 2000ul = 0ul then
+      outputStream.WriteLine(Printf.sprintf "%u\t%u" insCount distinguishedInsCount)
+    insCount <- insCount + 1ul
+
+    if not <| List.contains insAddr distinguishedAddrs then
+      distinguishedAddrs <- insAddr :: distinguishedAddrs
+      distinguishedInsCount <- distinguishedInsCount + 1ul
+
+let printInstructionHistogram<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (trace : DynamicTrace<'TAddress>) (outputFilename : string) =
+  let outputStream = new System.IO.StreamWriter(outputFilename, false)
+  let insHistogram = new System.Collections.Generic.Dictionary<'TAddress, uint32>()
+  for insAddr in trace do
+    if insHistogram.ContainsKey(insAddr) then
+      insHistogram.Item(insAddr) <- insHistogram.Item(insAddr) + 1ul
+    else
+      insHistogram.Add(insAddr, 1ul)
+  for Operators.KeyValue(insAddr, insCount) in insHistogram do
+    outputStream.WriteLine(Printf.sprintf "%s\t%u" (hexStringOfValue(insAddr)) insCount)
 
 (*=====================================================================================================================*)
 
@@ -411,14 +466,37 @@ let selectBoundedInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : c
     match filterState with
       | TraceRangeFilterStates.BeforeStart ->
         if insAddr = startAddr then
+          // Printf.printfn "start address reached: %s" <| hexStringOfValue startAddr
           filterState <- TraceRangeFilterStates.BetweenStartStop
           filteredTrace.Add insAddr
       | TraceRangeFilterStates.BetweenStartStop ->
         filteredTrace.Add insAddr
-        if insAddr = stopAddr then filterState <- TraceRangeFilterStates.AfterStop
+        if insAddr = stopAddr then
+          // Printf.printfn "stop address reached: %s" <| hexStringOfValue stopAddr
+          filterState <- TraceRangeFilterStates.AfterStop
       | TraceRangeFilterStates.AfterStop -> ()
       | _ -> failwith "invalid filter state"
   filteredTrace
+
+// select the list of all intervals [start, end]
+let selectBoundedIntervals<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
+  let insInterval = DynamicTrace<'TAddress>()
+  let mutable selectedIntervals = []
+  let mutable filterState = TraceRangeFilterStates.BeforeStart
+  for insAddr in trace do
+    match filterState with
+      | TraceRangeFilterStates.BeforeStart ->
+        if insAddr = startAddr then
+          insInterval.Add insAddr
+          filterState <- TraceRangeFilterStates.BetweenStartStop
+      | TraceRangeFilterStates.BetweenStartStop ->
+        insInterval.Add insAddr
+        if insAddr = stopAddr then
+          selectedIntervals <- insInterval.GetRange(0, Seq.length insInterval) :: selectedIntervals
+          insInterval.Clear()
+          filterState <- TraceRangeFilterStates.BeforeStart
+      | _ -> failwith "invalid filter state"
+  selectedIntervals
 
 // remove all instructions in (start, end)
 let removeOpenInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (startAddr:'TAddress, stopAddr:'TAddress) (trace:DynamicTrace<'TAddress>) =
@@ -433,8 +511,7 @@ let removeOpenInterval<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
         if insAddr = stopAddr then
           filterState <- TraceRangeFilterStates.AfterStop
           filteredTrace.Add insAddr
-      | TraceRangeFilterStates.AfterStop ->
-        filteredTrace.Add insAddr
+      | TraceRangeFilterStates.AfterStop -> filteredTrace.Add insAddr
       | _ -> failwith "invalid filter state"
   filteredTrace
 
@@ -500,8 +577,8 @@ let filterStandardCall<'TAddress when 'TAddress : unmanaged and 'TAddress : comp
 
 [<EntryPoint>]
 let main argv =
-  if Array.length argv <> 1 then
-    Printf.printfn "give a serialized trace file from the command line (e.g. analyzer trace_file)"
+  if Array.length argv < 2 then
+    Printf.printfn "give a serialized trace file from the command line and an output file (e.g. analyzer trace_file output_file)"
     0
   else
     let timer = new System.Diagnostics.Stopwatch()
@@ -509,7 +586,8 @@ let main argv =
     use traceFileReader = new System.IO.BinaryReader(System.IO.File.OpenRead(argv.[0]))
     let (addrIntSize, boolSize, threadIdSize) = parseTraceHeader traceFileReader
     Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrIntSize boolSize threadIdSize
-    if addrIntSize = (byte 8) then
+
+    if addrIntSize = (byte 8) then // x86_64
       let (insMap, insTrace) = deserializeDynamicTrace<uint64> traceFileReader
       // printDynamicTrace insMap insTrace
       Printf.printfn "parsed instructions: %d" (Seq.length insTrace)
@@ -533,16 +611,59 @@ let main argv =
       //     Printf.printfn "%s" <| hexStringOfValue insAddr
       //   Printf.printfn "end block"
       let basicBlockCFG = constructBasicBlockCfg basicBlocks basicCFG
-      printBasicBlockCfg insMap basicBlockCFG "hello.dot"
+      printBasicBlockCfg insMap basicBlockCFG argv.[1]
       // filteredTrace <- filterStandardCall<uint64> 0x4004f9UL insMap filteredTrace
       // // ignore filteredTrace
       // printDynamicTrace insMap filteredTrace
       // deserializeTrace<uint64> traceFileReader |> printTrace<uint64>
       // let trace_length = getTraceLength<uint64> traceFileReader
       // Printf.printfn "number of serialized instructions: %d" trace_length
-    else
+    else // x86
       // deserializeTrace<uint32> traceFileReader |> printTrace<uint32>
-      let trace_length = getTraceLength<uint32> traceFileReader
-      Printf.printfn "serialized instructions: %d" trace_length
-    Printf.printfn "elapsed time: %i ms" timer.ElapsedMilliseconds
+      // let traceLength = getTraceLength<uint32> traceFileReader
+      // Printf.printfn "serialized instructions: %d" traceLength
+      Printf.printf "deserializing trace "
+      let (insMap, insTrace) = deserializeDynamicTrace<uint32> traceFileReader
+      Printf.printfn " done."
+      Printf.printfn "parsed instructions: %d" <| Seq.length insTrace
+      // let filteredTrace = insTrace
+      // let mutable filteredTrace = selectBoundedInterval<uint32> (0x40428cul, 0x4042e0ul) insTrace
+      // filteredTrace <- filterStandardCall<uint32> 0x4042c6ul insMap filteredTrace
+      // filteredTrace <- filterStandardCall<uint32> 0x4042d2ul insMap filteredTrace
+      // let mutable filteredTrace = selectBoundedInterval<uint32> (0x404276ul, 0x40428bul) insTrace
+      // Printf.printfn "filtered trace length: %d (distinct: %d)" (Seq.length filteredTrace) (Seq.length <| Seq.distinct filteredTrace)
+      let mutable filteredTraces = selectBoundedIntervals<uint32> (0x40428cul, 0x4042e0ul) insTrace
+      filteredTraces <- List.map (fun aTrace ->
+                                  ((filterStandardCall<uint32> 0x4042c6ul insMap) >> (filterStandardCall<uint32> 0x4042d2ul insMap)) aTrace) filteredTraces
+      for trace in filteredTraces do
+        Printf.printfn "trace length: %u" <| Seq.length trace
+      // printDynamicTrace<uint32> insMap filteredTrace 
+      // printInstructionCountHistogram filteredTrace argv.[1]
+      // if Array.length argv > 2 then
+      //   printInstructionHistogram filteredTrace argv.[2]
+      // let rootInsAddr = Seq.head filteredTrace
+      // Printf.printfn "root address: 0x%x" rootInsAddr
+      Printf.printfn "constructing simple CFG ... "
+      let basicCFG = constructSimpleCfgFromTraces<uint32> filteredTraces
+      // printSimpleCfg insMap basicCFG "simple.dot"
+      // filteredTrace.Clear() // we dont need the filtered trace anymore
+      Printf.printfn "done."
+      let rootInsAddr = 0x40428cul
+      Printf.printfn "computing basic blocks ... "
+      let basicBlocks = computeBasicBlocks rootInsAddr basicCFG
+      Printf.printfn "basic blocks: %d" <| List.length basicBlocks
+      // List.iter (fun bb -> Printf.printfn "=====\n%s\n====="  <| (getBasicBlockLabel insMap bb)) basicBlocks
+      // for bb in basicBlocks do
+      //   Printf.printfn "start block"
+      //   for insAddr in bb do
+      //     Printf.printfn "%s" <| hexStringOfValue insAddr
+      //   Printf.printfn "end block"
+      Printf.printfn "done."
+      Printf.printfn "constructing basic block CFG ..."
+      let basicBlockCFG = constructBasicBlockCfg basicBlocks basicCFG
+      Printf.printfn "done."
+      Printf.printfn "output CFG: %s" argv.[1]
+      printBasicBlockCfg insMap basicBlockCFG argv.[1]
+
+    Printf.printfn "All done, elapsed time: %i ms" timer.ElapsedMilliseconds
     1

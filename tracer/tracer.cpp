@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <cassert>
+//#include <memory>
 
 extern "C" {
 #include <xed-interface.h>
@@ -34,6 +35,7 @@ struct instruction_t
   BOOL has_fall_through;
 
   instruction_t(const INS& ins);
+  instruction_t(const instruction_t& ins);
   virtual ~instruction_t();
 };
 
@@ -47,6 +49,8 @@ instruction_t::instruction_t(const INS& ins)
   PIN_SafeCopy(this->opcode_buffer, reinterpret_cast<VOID*>(this->address), this->opcode_size);
 
   this->mnemonic_string = INS_Disassemble(ins);
+
+//  std::cout << "create: " << StringFromAddrint(this->address) << " " << this->mnemonic_string << std::endl;
 
   INT32 ins_cat = INS_Category(ins);
   this->is_fp = (ins_cat == XED_CATEGORY_X87_ALU || ins_cat == XED_CATEGORY_MMX);
@@ -66,14 +70,29 @@ instruction_t::instruction_t(const INS& ins)
     }
   }
 
-//  std::cout << this->memonic_string << std::endl;
   this->is_memory_read = INS_IsMemoryRead(ins);
-//  if (this->is_memory_read) std::cout << "is memory read\n"; else std::cout << "is not memory read\n";
   this->is_memory_write = INS_IsMemoryWrite(ins);
   this->has_memory_read2 = INS_HasMemoryRead2(ins);
 //  this->has_known_memory_size = INS_hasKnownMemorySize(ins);
 
   this->has_fall_through = INS_HasFallThrough(ins);
+}
+
+instruction_t::instruction_t(const instruction_t &ins) : address(ins.address),
+                                                         next_address(ins.next_address),
+                                                         opcode_size(ins.opcode_size),
+                                                         mnemonic_string(ins.mnemonic_string),
+                                                         src_registers(ins.src_registers),
+                                                         dst_registers(ins.dst_registers),
+                                                         is_fp(ins.is_fp),
+                                                         is_memory_read(ins.is_memory_read),
+                                                         is_memory_write(ins.is_memory_write),
+                                                         has_memory_read2(ins.has_memory_read2),
+                                                         has_fall_through(ins.has_fall_through)
+{
+  this->opcode_buffer = new UINT8[this->opcode_size];
+  memcpy(this->opcode_buffer, ins.opcode_buffer, this->opcode_size);
+//  PIN_SafeCopy(this->opcode_buffer, reinterpret_cast<VOID*>(this->address), this->opcode_size);
 }
 
 instruction_t::~instruction_t()
@@ -94,8 +113,10 @@ struct rt_instruction_t : public instruction_t
   std::size_t serialize(UINT8* buffer);
 };
 
-rt_instruction_t::rt_instruction_t(const instruction_t &static_ins) :
-  instruction_t(static_ins) {}
+rt_instruction_t::rt_instruction_t(const instruction_t &static_ins) : instruction_t(static_ins)
+{
+//  std::cout << "run: " << StringFromAddrint(this->address) << " " << this->mnemonic_string << std::endl;
+}
 
 static std::size_t length_of_register_map(const std::map<REG, PIN_REGISTER>& reg_map)
 {
@@ -346,6 +367,7 @@ std::string get_binary_name(int argc, char* argv[])
 }
 
 
+//static instruction_t *p_ins = 0;
 // implement callback functions
 static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
 {
@@ -359,8 +381,6 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
   case BetweenStartAndStop:
     break;
   case AfterStop:
-    break;
-  default:
     break;
   }
 
@@ -383,7 +403,11 @@ static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTE
 
       if (stop_address != 0 && current_instruction_at_thread[thread_id]->address == stop_address) tracing_state = AfterStop;
 
-      serialize_threaded_instruction_callback(thread_id); // the instruction will be reset after serialized
+      serialize_threaded_instruction_callback(thread_id);
+
+      // reset serialized instruction
+      delete current_instruction_at_thread[thread_id];
+      current_instruction_at_thread[thread_id] = 0;
     }
 
     current_instruction_at_thread[thread_id] = new rt_instruction_t(*cached_instruction_at_address[ins_addr]);
@@ -396,7 +420,7 @@ static VOID save_read_registers_callback(const CONTEXT *p_context, THREADID thre
 {
   if (tracing_state != BetweenStartAndStop) return;
 
-  rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
+  rt_instruction_t *runtime_ins = current_instruction_at_thread[thread_id];
   for (std::map<REG, PIN_REGISTER>::iterator reg_iter = runtime_ins->src_registers.begin();
        reg_iter != runtime_ins->src_registers.end(); ++reg_iter) {
     PIN_REGISTER reg_value;
@@ -411,7 +435,7 @@ static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID t
 {
   if (tracing_state != BetweenStartAndStop) return;
 
-  rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
+  rt_instruction_t *runtime_ins = current_instruction_at_thread[thread_id];
 
   std::map<REG, PIN_REGISTER>::const_iterator reg_iter = runtime_ins->dst_registers.begin();
   for (; reg_iter != runtime_ins->dst_registers.end(); ++reg_iter) {
@@ -425,11 +449,9 @@ static VOID save_written_registers_callback(const CONTEXT *p_context, THREADID t
 
 static VOID save_loaded_memory_callback(ADDRINT load_addr, UINT32 load_size, THREADID thread_id)
 {
-//  std::cout << "save loaded memory\n";
-//  PIN_ExitApplication(1);
   if (tracing_state != BetweenStartAndStop) return;
 
-  rt_instruction_t* runtime_ins = current_instruction_at_thread[thread_id];
+  rt_instruction_t *runtime_ins = current_instruction_at_thread[thread_id];
   ADDRINT upper_addr = load_addr + load_size;
   for (ADDRINT mem_addr = load_addr; mem_addr < upper_addr; ++mem_addr) {
     UINT8 byte_value;
@@ -459,19 +481,20 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
 {
   if (tracing_state != BetweenStartAndStop) return;
 
-  ADDRINT serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
+  std::size_t serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
 
   // serialize size of serialized instruction: allow random access on the serialized trace
-  /*output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
+  output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
 
-  UINT8 *buffer = new UINT8[serialized_length];
+  static UINT8 buffer[1000];
+  // UINT8 *buffer = new UINT8[serialized_length];
   current_instruction_at_thread[thread_id]->serialize(buffer);
   output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
-  delete [] buffer;*/
+  // delete [] buffer;
 
-  // reset serialized instruction
-  delete current_instruction_at_thread[thread_id];
-  current_instruction_at_thread[thread_id] = 0;
+  // // reset serialized instruction
+  // delete current_instruction_at_thread[thread_id];
+  // current_instruction_at_thread[thread_id] = 0;
 
   // compare with maximal length (0 = no limit)
   current_trace_length++;
@@ -525,31 +548,6 @@ static VOID inject_callbacks(const INS& ins)
     }
   }
 
-//  // if the instruction has fall through then we can insert an "after execution" callback
-//  if (!instrumented_instruction->has_fall_through) {
-//    if (!instrumented_instruction->dst_registers.empty()) {
-//        INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_written_registers_callback),
-//                       IARG_CONST_CONTEXT, IARG_THREAD_ID, IARG_END);
-//    }
-
-//    if (instrumented_instruction->is_memory_write) {
-//      INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
-//                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
-//    }
-//    // so we can save it into trace when all needed information has been captured
-//    INS_InsertCall(ins, IPOINT_AFTER, reinterpret_cast<AFUNPTR>(serialize_threaded_instruction_callback),
-//                   IARG_THREAD_ID, IARG_END);
-
-//  }
-//  else {
-//    // we cannot use IPOINT_AFTER for instructions having no "fall through", so use IPOINT_BEFORE just to
-//    // specify which data should be captured
-//    if (instrumented_instruction->is_memory_write) {
-//      INS_InsertCall(ins, IPOINT_BEFORE, reinterpret_cast<AFUNPTR>(save_stored_memory_callback),
-//                     IARG_MEMORYWRITE_EA, IARG_MEMORYWRITE_SIZE, IARG_THREAD_ID, IARG_END);
-//    }
-//  }
-
   return;
 }
 
@@ -602,7 +600,7 @@ int main(int argc, char *argv[])
             << "limit length: " << max_trace_length;
   if (max_trace_length == 0) std::cout << " (no limit)";
   std::cout << std::endl
-	        << "stop address: " << StringFromAddrint(start_address);
+            << "start address: " << StringFromAddrint(start_address);
   if (start_address == 0) std::cout << " (from beginning)";
   std::cout << std::endl
 	        << "stop address: " << StringFromAddrint(stop_address);
