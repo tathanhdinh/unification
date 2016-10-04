@@ -202,13 +202,28 @@ let getLeaderSmInstruction<'TAddress when 'TAddress : unmanaged and
                                           'TAddress : comparison> (branchInstructions:SmInstruction<'TAddress> list) 
                                                                   (targetInstructions:SmInstruction<'TAddress> list)
                                                                   (trace:Trace<'TAddress>) =
-  let leaderInss = new System.Collections.Generic.List<SmInstruction<'TAddress>>(targetInstructions)
-  if trace.Count > 1 then
-    for i = 0 to trace.Count - 2 do
-      if leaderInss.Contains trace.[i] then
-        if not (leaderInss.Contains trace.[i + 1]) then
+  if not (Seq.isEmpty trace) then
+    let leaderInss = new System.Collections.Generic.List<SmInstruction<'TAddress>>(targetInstructions)
+    leaderInss.Add trace.[0]
+    if trace.Count > 1 then
+      for i = 0 to trace.Count - 2 do
+        if List.contains trace.[i] branchInstructions then
           leaderInss.Add trace.[i + 1]
-  List.ofSeq leaderInss
+    Seq.distinct leaderInss |> List.ofSeq
+  else
+    []
+
+//  let leaderInss = new System.Collections.Generic.List<SmInstruction<'TAddress>>(targetInstructions)
+//  if not (Seq.isEmpty trace) then
+//    leaderInss.Add trace.[0]
+////    if not (leaderInss.Contains trace.[0]) then
+////      leaderInss.Add trace.[0]
+//  if trace.Count > 1 then
+//    for i = 0 to trace.Count - 2 do
+//      if leaderInss.Contains trace.[i] then
+//        if not (leaderInss.Contains trace.[i + 1]) then
+//          leaderInss.Add trace.[i + 1]
+//  List.ofSeq leaderInss
 
 (*================================================================================================================*)
 
@@ -220,13 +235,27 @@ let buildBasicBlocks<'TAddress when 'TAddress : unmanaged and
   for leaderIns in leaderInstructions do
     let mutable newBasicBlock = [leaderIns]
     let mutable insIdx = distinguishedTrace.IndexOf(leaderIns)
-    insIdx <- (insIdx + 1) / distinguishedTrace.Count
-    while not (List.contains distinguishedTrace.[insIdx] leaderInstructions) do
-      newBasicBlock <- distinguishedTrace.[insIdx] :: newBasicBlock
-      insIdx <- (insIdx + 1) / distinguishedTrace.Count
-    newBasicBlock <- List.rev newBasicBlock
-    basicBlocks.Add newBasicBlock
+    if (insIdx < distinguishedTrace.Count - 1) then
+      insIdx <- insIdx + 1
+      while (insIdx < distinguishedTrace.Count) && 
+            not (List.contains distinguishedTrace.[insIdx] leaderInstructions) do
+        newBasicBlock <- distinguishedTrace.[insIdx] :: newBasicBlock
+        insIdx <- insIdx + 1
+      newBasicBlock <- List.rev newBasicBlock
+      basicBlocks.Add newBasicBlock
   Seq.toList basicBlocks
+
+let constructControlFlowGraph<'TAddress when 'TAddress : unmanaged and 
+                                             'TAddress : comparison> (trace:Trace<'TAddress>) 
+                                                                     (basicBlocks:BasicBlock<'TAddress> list) =
+  let connections = new System.Collections.Generic.List<SmInstruction<'TAddress> * SmInstruction<'TAddress>>()
+  if trace.Count > 1 then
+    for insIdx = 0 to trace.Count - 2 do
+      if not (connections.Contains (trace.[insIdx], trace.[insIdx + 1])) then
+        connections.Add (trace.[insIdx], trace.[insIdx + 1])
+  for srcBb in basicBlocks do
+    for dstBb in basicBlocks do
+
 
 //  let basicBlocks = new System.Collections.Generic.List<BasicBlock<'TAddress>>()
 //  let mutable insIndex = 0
