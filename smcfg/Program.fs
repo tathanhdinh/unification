@@ -21,6 +21,21 @@ type BasicBlockCfg<'TAddress when 'TAddress : comparison> = QuickGraph.Bidirecti
 
 (*================================================================================================================*)
 
+let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
+  match box insAddr with
+    | :? uint32 as uint32Addr -> Printf.sprintf "0x%x" uint32Addr
+    | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
+    | _ -> failwith "unknown type parameter"
+
+
+let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
+  let addrintSize = traceFileReader.ReadByte ()
+  let boolSize = traceFileReader.ReadByte ()
+  let threadidSize = traceFileReader.ReadByte ()
+  (addrintSize, boolSize, threadidSize)
+
+(*================================================================================================================*)
+
 let getTraceLength<'TAddress> (traceFileReader : System.IO.BinaryReader) =
   let mutable traceLength = uint32 0
   match typeof<'TAddress> with
@@ -86,7 +101,8 @@ let deserializeMemMap<'TAddress when 'TAddress : unmanaged> (traceFileReader:Sys
 (*================================================================================================================*)
 
 let deserializeTrace<'TAddress  when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
-  let trace = ResizeArray<_>()
+  let trace = new NativeTrace<'TAddress>()
+//   ResizeArray<_>()
   while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
     let serializedLength =
       match typeof<'TAddress> with
@@ -110,10 +126,17 @@ let deserializeTrace<'TAddress  when 'TAddress : unmanaged> (traceFileReader:Sys
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     let threadId = traceFileReader.ReadUInt32 ()
-    trace.Add { Address = address;
-                NextAddress = nextAddress;
-                Mnemonic = mnemonicStr;
-                ThreadId = threadId }
+    let shouldAddToTrace = 
+      match typeof<'TAddress> with
+        | t when t = typeof<uint32> -> (unbox<uint32> address) < 0x70000000ul
+        | t when t = typeof<uint64> -> (unbox<uint64> address) < 0x70000000UL
+        | _ -> failwith "unknown type parameter"
+    if shouldAddToTrace then
+      trace.Add { Address = address;
+                  NextAddress = nextAddress;
+                  Mnemonic = mnemonicStr;
+                  ThreadId = threadId }
+//    Printf.printf "%u " trace.Count
   trace
 
 (*================================================================================================================*)
@@ -159,7 +182,8 @@ let getDistinguishedTrace<'TAddress when 'TAddress : unmanaged and
 let getBranchSmInstructions<'TAddress when 'TAddress : unmanaged and 
                                            'TAddress : comparison> (distinguishedInss:Trace<'TAddress>) 
                                                                    (trace:Trace<'TAddress>) =
-  let goAfterMap = new System.Collections.Generic.Dictionary<SmInstruction<'TAddress>, SmInstruction<'TAddress> list>()
+  let goAfterMap = new System.Collections.Generic.Dictionary<SmInstruction<'TAddress>, 
+                                                             SmInstruction<'TAddress> list>()
   for ins in distinguishedInss do
     goAfterMap.Add (ins, List.empty) |> ignore
   if trace.Count > 1 then
@@ -182,7 +206,8 @@ let getTargetSmInstructions<'TAddress when 'TAddress : unmanaged and
                                            'TAddress : comparison> (distinguishedInss:Trace<'TAddress>) 
                                                                    (trace:Trace<'TAddress>) =
 //  let insGoBefore = new Map<SmInstruction<'TAddress>, SmInstruction<'TAddress> list>()
-  let goBeforeMap = new System.Collections.Generic.Dictionary<SmInstruction<'TAddress>, SmInstruction<'TAddress> list>()
+  let goBeforeMap = new System.Collections.Generic.Dictionary<SmInstruction<'TAddress>, 
+                                                              SmInstruction<'TAddress> list>()
   for ins in distinguishedInss do
     goBeforeMap.Add (ins, List.empty) |> ignore
   if trace.Count > 1 then
@@ -270,12 +295,6 @@ let constructControlFlowGraph<'TAddress when 'TAddress : unmanaged and
 
 (*================================================================================================================*)
 
-let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
-  match box insAddr with
-    | :? uint32 as uint32Addr -> Printf.sprintf "0x%x" uint32Addr
-    | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
-    | _ -> failwith "unknown type parameter"
-
 let basicBlockLabel<'TAddress when 'TAddress : unmanaged and 
                                    'TAddress : comparison> (locationMap:LocationMap<'TAddress>) 
                                                            (basicBlock:BasicBlock<'TAddress>) =
@@ -284,7 +303,7 @@ let basicBlockLabel<'TAddress when 'TAddress : unmanaged and
              Printf.sprintf "%s  %s\l" (hexStringOfValue<'TAddress> ins.Address) 
                                        ((locationMap.[ins.Address]).[ins.InsIndex]).Mnemonic) basicBlock
                                                                             
-type dotEngine () = 
+type BasicBlockDotEngine () = 
   interface QuickGraph.Graphviz.IDotEngine with
     member this.Run (imgType:QuickGraph.Graphviz.Dot.GraphvizImageType, dotString:string, outputFilename:string) =
       System.IO.File.WriteAllText(outputFilename, dotString)
@@ -302,29 +321,56 @@ let printControlFlowGraph<'TAddress when 'TAddress : comparison and
                                     args.VertexFormatter.Label <- basicBlockLabel locationMap basicBlock
                                     args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                     args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box)
-  
+  graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename)
 
-
-//  let basicBlocks = new System.Collections.Generic.List<BasicBlock<'TAddress>>()
-//  let mutable insIndex = 0
-//  let mutable newBasicBlock = List.empty
-//  while insIndex < distinguishedTrace.Count do
-//    newBasicBlock <- List.empty
-//    if List.contains distinguishedTrace.[insIndex] leaderInstructions then
-//      newBasicBlock <- [distinguishedTrace.[insIndex]]
-
-      
-
-(*================================================================================================================*)
-
-//let   
-
-// see http://www.cis.upenn.edu/~cis570/slides/lecture03.pdf
-//let buildBasicBlocks<'TAddress when 'TAddress : unmanaged and
-//                                    'TAddress : comparison> (trace:Trace<'TAddress>) =
-  
+(*================================================================================================================*)  
 
 [<EntryPoint>]
 let main argv = 
-    printfn "%A" argv
-     0 // return an integer exit code
+  if Array.length argv < 1 then
+    Printf.printfn "please give a serialized trace file and/or an output file"
+    0
+  else
+    let timer = new System.Diagnostics.Stopwatch()
+    timer.Start()
+
+    use traceFileReader = new System.IO.BinaryReader(System.IO.File.OpenRead(argv.[0]))
+    let (addrIntSize, boolSize, threadIdSize) = parseTraceHeader traceFileReader
+    Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrIntSize boolSize threadIdSize
+
+    if addrIntSize = 8uy then
+      // x86_64 (nothing now)
+      Printf.printfn "x86_64"
+    else
+      Printf.printf "deserializing trace... "
+      let nativeTrace = deserializeTrace<uint32> traceFileReader
+      Printf.printfn "done (%u instructions)." nativeTrace.Count
+
+      let locationMap = getLocationMap<uint32> nativeTrace
+      let trace = convertNativeTraceToTrace<uint32> nativeTrace locationMap
+
+      Printf.printf "calculate distinguished trace... "
+      let distinguishedTrace = getDistinguishedTrace<uint32> trace
+      Printf.printfn "done (%u instructions)." distinguishedTrace.Count
+
+      let branchInss = getBranchSmInstructions<uint32> distinguishedTrace trace
+      let targetInss = getTargetSmInstructions<uint32> distinguishedTrace trace
+      let leaderInss = getLeaderSmInstruction<uint32> branchInss targetInss trace
+
+      let basicBlocks = buildBasicBlocks<uint32> leaderInss distinguishedTrace
+      let cfg = constructControlFlowGraph trace basicBlocks
+      
+      let outputFilename = 
+        if Array.length argv > 1 then
+          argv.[1]
+        else
+          System.IO.Path.ChangeExtension(argv.[0], ".dot")
+      Printf.printf "write control flow graph to %s" outputFilename
+      ignore <| printControlFlowGraph distinguishedTrace locationMap cfg outputFilename
+      Printf.printfn "done."
+
+      Printf.printfn "all done, elapsed time: %i ms" timer.ElapsedMilliseconds
+    1
+
+//    printfn "%A" argv
+//     0 // return an integer exit code
