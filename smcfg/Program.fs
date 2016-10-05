@@ -8,13 +8,16 @@ type NativeTrace<'TAddress> = ResizeArray<Instruction<'TAddress>>
 type LocationMap<'TAddress when 'TAddress : comparison> = Map<'TAddress, Instruction<'TAddress> array>
 
 type SmInstruction<'TAddress> = { Address : 'TAddress;
-                                  InsIndex : uint32 }
+                                  InsIndex : int }
 
 type Trace<'TAddress when 'TAddress : comparison> = ResizeArray<SmInstruction<'TAddress>>
 
 //type BasicBlock<'TAddress when 'TAddress : comparison> = Trace<'TAddress>
 
 type BasicBlock<'TAddress when 'TAddress : comparison> = SmInstruction<'TAddress> list
+
+type BasicBlockCfg<'TAddress when 'TAddress : comparison> = QuickGraph.BidirectionalGraph<BasicBlock<'TAddress>, 
+                                                                                          QuickGraph.SEdge<BasicBlock<'TAddress>>>
 
 (*================================================================================================================*)
 
@@ -137,7 +140,7 @@ let convertNativeTraceToTrace<'TAddress when 'TAddress : unmanaged and
   for instruction in nativeTrace do
     let locIns = Map.find instruction.Address locationMap
     let insIndex = Array.findIndex (fun (ins:Instruction<'TAddress>) -> ins.Mnemonic = instruction.Mnemonic) locIns
-    let loc = { Address = instruction.Address; InsIndex = uint32 insIndex }
+    let loc = { Address = instruction.Address; InsIndex = insIndex }
     trace.Add loc
   trace
 
@@ -245,16 +248,61 @@ let buildBasicBlocks<'TAddress when 'TAddress : unmanaged and
       basicBlocks.Add newBasicBlock
   Seq.toList basicBlocks
 
+(*================================================================================================================*)
+
 let constructControlFlowGraph<'TAddress when 'TAddress : unmanaged and 
                                              'TAddress : comparison> (trace:Trace<'TAddress>) 
                                                                      (basicBlocks:BasicBlock<'TAddress> list) =
   let connections = new System.Collections.Generic.List<SmInstruction<'TAddress> * SmInstruction<'TAddress>>()
+  let basicBlockConnections = new System.Collections.Generic.List<BasicBlock<'TAddress> * BasicBlock<'TAddress>>()
   if trace.Count > 1 then
     for insIdx = 0 to trace.Count - 2 do
       if not (connections.Contains (trace.[insIdx], trace.[insIdx + 1])) then
         connections.Add (trace.[insIdx], trace.[insIdx + 1])
   for srcBb in basicBlocks do
     for dstBb in basicBlocks do
+      let srcIns = Seq.last srcBb
+      let dstIns = Seq.head dstBb
+      if connections.Contains (srcIns, dstIns) then
+        basicBlockConnections.Add (srcBb, dstBb)
+  let basicBlockEdges = Seq.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) (Seq.distinct basicBlockConnections)
+  QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlockEdges
+
+(*================================================================================================================*)
+
+let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
+  match box insAddr with
+    | :? uint32 as uint32Addr -> Printf.sprintf "0x%x" uint32Addr
+    | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
+    | _ -> failwith "unknown type parameter"
+
+let basicBlockLabel<'TAddress when 'TAddress : unmanaged and 
+                                   'TAddress : comparison> (locationMap:LocationMap<'TAddress>) 
+                                                           (basicBlock:BasicBlock<'TAddress>) =
+ List.fold (+) "" <| 
+ List.map (fun (ins:SmInstruction<'TAddress>) -> 
+             Printf.sprintf "%s  %s\l" (hexStringOfValue<'TAddress> ins.Address) 
+                                       ((locationMap.[ins.Address]).[ins.InsIndex]).Mnemonic) basicBlock
+                                                                            
+type dotEngine () = 
+  interface QuickGraph.Graphviz.IDotEngine with
+    member this.Run (imgType:QuickGraph.Graphviz.Dot.GraphvizImageType, dotString:string, outputFilename:string) =
+      System.IO.File.WriteAllText(outputFilename, dotString)
+      outputFilename
+
+let printControlFlowGraph<'TAddress when 'TAddress : comparison and 
+                                         'TAddress : unmanaged> (distinguisedTrace:Trace<'TAddress>) 
+                                                                (locationMap:LocationMap<'TAddress>)
+                                                                (bbCfg:BasicBlockCfg<'TAddress>)
+                                                                (outputFilename:string) =
+  let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(bbCfg)
+  graphvizFormat.FormatVertex.Add(fun args -> 
+                                    let basicBlock = args.Vertex
+                                    args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
+                                    args.VertexFormatter.Label <- basicBlockLabel locationMap basicBlock
+                                    args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
+                                    args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box)
+  
 
 
 //  let basicBlocks = new System.Collections.Generic.List<BasicBlock<'TAddress>>()
