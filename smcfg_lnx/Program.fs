@@ -35,10 +35,30 @@ let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let threadidSize = traceFileReader.ReadByte ()
   (addrintSize, boolSize, threadidSize)
 
+let genericRead<'TAddress when 'TAddress : unmanaged> (traceFileReader : System.IO.BinaryReader) =
+  match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> unbox<'TAddress> (box <| traceFileReader.ReadUInt32())
+    | t when t = typeof<uint64> -> unbox<'TAddress> (box <| traceFileReader.ReadUInt64())
+    | _ -> failwith "unknown type parameter"
+
+let genericReadInt<'TAddress when 'TAddress : unmanaged> (traceFileReader : System.IO.BinaryReader) =
+  match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> int <| traceFileReader.ReadUInt32()
+    | t when t = typeof<uint64> -> int <| traceFileReader.ReadUInt64()
+    | _ -> failwith "unknown type parameter"
+
 (*================================================================================================================*)
 
-let getTraceLength<'TAddress> (traceFileReader : System.IO.BinaryReader) =
+let getTraceLengthGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader : System.IO.BinaryReader) = 
   let mutable traceLength = 0u
+  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+    let insLength = genericReadInt<'TAddress> traceFileReader
+    traceFileReader.BaseStream.Seek (int64 insLength, System.IO.SeekOrigin.Current) |> ignore
+    traceLength <- traceLength + 1u
+  traceLength
+
+let getTraceLength<'TAddress> (traceFileReader : System.IO.BinaryReader) =
+  let mutable traceLength = uint32 0
   match typeof<'TAddress> with
     | t when t = typeof<uint32> ->
       while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
@@ -56,6 +76,11 @@ let getTraceLength<'TAddress> (traceFileReader : System.IO.BinaryReader) =
   traceLength
 
 (*================================================================================================================*)
+
+let deserializeOpcodeGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
+  let opcodeSize = genericReadInt<'TAddress> traceFileReader
+  let opcodeBuffer = traceFileReader.ReadBytes opcodeSize
+  opcodeBuffer
 
 let deserializeOpcode<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   let opcodeSize =
@@ -388,3 +413,4 @@ let main argv =
 
 //    printfn "%A" argv
 //     0 // return an integer exit code
+  
