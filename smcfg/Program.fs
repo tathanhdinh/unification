@@ -5,7 +5,7 @@
 
 type NativeTrace<'TAddress> = ResizeArray<Instruction<'TAddress>>
 
-type LocationMap<'TAddress when 'TAddress : comparison> = Map<'TAddress, Instruction<'TAddress> array>
+type LocationMap<'TAddress when 'TAddress : comparison> = System.Collections.Generic.Dictionary<'TAddress, Instruction<'TAddress> array>
 
 type SmInstruction<'TAddress> = { Address : 'TAddress;
                                   InsIndex : int }
@@ -126,16 +126,17 @@ let deserializeTrace<'TAddress  when 'TAddress : unmanaged> (traceFileReader:Sys
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     deserializeMemMap<'TAddress> traceFileReader |> ignore
     let threadId = traceFileReader.ReadUInt32 ()
-    let shouldAddToTrace = 
-      match typeof<'TAddress> with
-        | t when t = typeof<uint32> -> (unbox<uint32> address) < 0x70000000ul
-        | t when t = typeof<uint64> -> (unbox<uint64> address) < 0x70000000UL
-        | _ -> failwith "unknown type parameter"
-    if shouldAddToTrace then
-      trace.Add { Address = address;
-                  NextAddress = nextAddress;
-                  Mnemonic = mnemonicStr;
-                  ThreadId = threadId }
+//    let shouldAddToTrace = 
+//      match typeof<'TAddress> with
+//        | t when t = typeof<uint32> -> (unbox<uint32> address) < 0x70000000ul
+//        | t when t = typeof<uint64> -> (unbox<uint64> address) < 0x70000000UL
+//        | _ -> failwith "unknown type parameter"
+//    if shouldAddToTrace then
+    trace.Add { Address = address;
+                NextAddress = nextAddress;
+                Mnemonic = mnemonicStr;
+                ThreadId = threadId }
+//    Printf.printfn "%s" <| hexStringOfValue<'TAddress> address
 //    Printf.printf "%u " trace.Count
   trace
 
@@ -143,15 +144,23 @@ let deserializeTrace<'TAddress  when 'TAddress : unmanaged> (traceFileReader:Sys
 
 let getLocationMap<'TAddress when 'TAddress : unmanaged and
                                   'TAddress : comparison> (nativeTrace:NativeTrace<'TAddress>) =
-  let mutable locationMap = Map.empty
+//  let locationMap = Map.empty
+  let locationMap = new LocationMap<'TAddress>()
   for instruction in nativeTrace do
     if locationMap.ContainsKey instruction.Address then
-      let locIns = Map.find instruction.Address locationMap
+//      let locIns = Map.find instruction.Address locationMap
+      let locIns = locationMap.Item instruction.Address
       if not (Array.exists (fun (ins:Instruction<'TAddress>) -> 
                               ins.Mnemonic = instruction.Mnemonic) locIns) then
         let newLocIns = Array.append locIns [|instruction|]
-        Map.remove instruction.Address locationMap |> 
-        Map.add instruction.Address newLocIns |> ignore
+//        Map.remove instruction.Address locationMap |> 
+//        Map.add instruction.Address newLocIns |> ignore
+        locationMap.Add(instruction.Address, newLocIns)
+    else
+//      Map.add instruction.Address [|instruction|] |> ignore
+//      locationMap.Add instruction.Address [|instruction|]
+      locationMap.Add(instruction.Address, [|instruction|])
+//  Printf.printfn "location map size: %d" locationMap.Count
   locationMap
 
 (*================================================================================================================*)
@@ -161,7 +170,8 @@ let convertNativeTraceToTrace<'TAddress when 'TAddress : unmanaged and
                                                                      (locationMap:LocationMap<'TAddress>) =
   let trace = new Trace<'TAddress>()
   for instruction in nativeTrace do
-    let locIns = Map.find instruction.Address locationMap
+//    let locIns = Map.find instruction.Address locationMap
+    let locIns = locationMap.Item instruction.Address
     let insIndex = Array.findIndex (fun (ins:Instruction<'TAddress>) -> ins.Mnemonic = instruction.Mnemonic) locIns
     let loc = { Address = instruction.Address; InsIndex = insIndex }
     trace.Add loc
@@ -346,7 +356,10 @@ let main argv =
       let nativeTrace = deserializeTrace<uint32> traceFileReader
       Printf.printfn "done (%u instructions)." nativeTrace.Count
 
+      Printf.printf "calculate location map... "
       let locationMap = getLocationMap<uint32> nativeTrace
+      Printf.printfn "done (%u locations)." locationMap.Count
+
       let trace = convertNativeTraceToTrace<uint32> nativeTrace locationMap
 
       Printf.printf "calculate distinguished trace... "
@@ -365,7 +378,7 @@ let main argv =
           argv.[1]
         else
           System.IO.Path.ChangeExtension(argv.[0], ".dot")
-      Printf.printf "write control flow graph to %s" outputFilename
+      Printf.printfn "write control flow graph to %s" outputFilename
       ignore <| printControlFlowGraph distinguishedTrace locationMap cfg outputFilename
       Printf.printfn "done."
 
