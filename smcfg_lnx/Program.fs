@@ -28,7 +28,6 @@ let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
     | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
     | _ -> failwith "unknown type parameter"
 
-
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
