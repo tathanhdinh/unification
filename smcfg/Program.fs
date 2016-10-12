@@ -140,9 +140,11 @@ let deserializeMemMap<'TAddress when 'TAddress : unmanaged> (traceFileReader:Sys
 
 (*================================================================================================================*)
 
-let deserializeTraceGeneric<'TAddress  when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
+let deserializeTraceGeneric<'TAddress  when 'TAddress : unmanaged and 
+                                            'TAddress : comparison> (traceFileReader:System.IO.BinaryReader) 
+                                                                    (enableRepSimplification:bool) (countBound:int) =
   let trace = new NativeTrace<'TAddress>()
-  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) do
+  while (traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length) && (trace.Count < countBound) do
     let serializedLength = genericRead<'TAddress> traceFileReader
       // match typeof<'TAddress> with
       //   | t when t = typeof<uint32> -> traceFileReader.ReadUInt32 () |> unbox<'TAddress>
@@ -165,10 +167,24 @@ let deserializeTraceGeneric<'TAddress  when 'TAddress : unmanaged> (traceFileRea
     deserializeMemMapGeneric<'TAddress> traceFileReader |> ignore
     deserializeMemMapGeneric<'TAddress> traceFileReader |> ignore
     let threadId = traceFileReader.ReadUInt32 ()
-    trace.Add { Address = address;
-                NextAddress = nextAddress;
-                Mnemonic = mnemonicStr;
-                ThreadId = threadId }
+    let newItem = { Address = address;
+                    NextAddress = nextAddress;
+                    Mnemonic = mnemonicStr;
+                    ThreadId = threadId }
+    if enableRepSimplification then
+      if trace.Count >= 2 then
+        let lastItem = trace.Item(trace.Count - 1)
+        let beforeLastItem = trace.Item(trace.Count - 2)
+         
+        if (lastItem = beforeLastItem) && (newItem = lastItem) then
+          // Printf.printfn "rep instruction detected"
+          ignore ()
+        else
+          trace.Add newItem
+      else
+        trace.Add newItem 
+    else
+      trace.Add newItem
   trace
 
 let deserializeTrace<'TAddress  when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
@@ -340,7 +356,7 @@ let getLeaderSmInstruction<'TAddress when 'TAddress : unmanaged and
 let buildBasicBlocks<'TAddress when 'TAddress : unmanaged and
                                     'TAddress : comparison> (leaderInstructions:SmInstruction<'TAddress> list)
                                                             (distinguishedTrace:Trace<'TAddress>) =
-  let basicBlocks = new System.Collections.Generic.List<BasicBlock<'TAddress>>()
+  let basicBlocks = new ResizeArray<BasicBlock<'TAddress>>()
   for leaderIns in leaderInstructions do
     let mutable newBasicBlock = [leaderIns]
     let mutable insIdx = distinguishedTrace.IndexOf(leaderIns)
@@ -359,8 +375,8 @@ let buildBasicBlocks<'TAddress when 'TAddress : unmanaged and
 let constructControlFlowGraph<'TAddress when 'TAddress : unmanaged and
                                              'TAddress : comparison> (trace:Trace<'TAddress>)
                                                                      (basicBlocks:BasicBlock<'TAddress> list) =
-  let connections = new System.Collections.Generic.List<SmInstruction<'TAddress> * SmInstruction<'TAddress>>()
-  let basicBlockConnections = new System.Collections.Generic.List<BasicBlock<'TAddress> * BasicBlock<'TAddress>>()
+  let mutable connections = new ResizeArray<SmInstruction<'TAddress> * SmInstruction<'TAddress>>()
+  let basicBlockConnections = new ResizeArray<BasicBlock<'TAddress> * BasicBlock<'TAddress>>()
   if trace.Count > 1 then
     for insIdx = 0 to trace.Count - 2 do
       if not (connections.Contains (trace.[insIdx], trace.[insIdx + 1])) then
@@ -425,7 +441,7 @@ let main argv =
     else
       Printf.printf "deserializing trace... "
       // let nativeTrace = deserializeTrace<uint32> traceFileReader
-      let nativeTrace = deserializeTraceGeneric<uint32> traceFileReader
+      let nativeTrace = deserializeTraceGeneric<uint32> traceFileReader true 5000000
       Printf.printfn "done (%u instructions)." nativeTrace.Count
 
       Printf.printf "calculate location map... "
@@ -438,12 +454,25 @@ let main argv =
       let distinguishedTrace = getDistinguishedTrace<uint32> trace
       Printf.printfn "done (%u instructions)." distinguishedTrace.Count
 
+      Printf.printf "calculate branch instructions... "
       let branchInss = getBranchSmInstructions<uint32> distinguishedTrace trace
-      let targetInss = getTargetSmInstructions<uint32> distinguishedTrace trace
-      let leaderInss = getLeaderSmInstruction<uint32> branchInss targetInss trace
+      Printf.printfn "done (%u instructions)." <| List.length branchInss
 
+      Printf.printf "calculate target instructions... "
+      let targetInss = getTargetSmInstructions<uint32> distinguishedTrace trace
+      Printf.printfn "done (%u instructions)." <| List.length targetInss
+
+      Printf.printf "calculate leader instructions... "
+      let leaderInss = getLeaderSmInstruction<uint32> branchInss targetInss trace
+      Printf.printfn "done (%u instructions)." <| List.length leaderInss
+
+      Printf.printf "build basic blocks... "
       let basicBlocks = buildBasicBlocks<uint32> leaderInss distinguishedTrace
+      Printf.printfn "done (%u basic blocks)." <| List.length basicBlocks
+
+      Printf.printf "construct control flow graph... "
       let cfg = constructControlFlowGraph trace basicBlocks
+      Printf.printfn "done."
 
       let outputFilename =
         if Array.length argv > 1 then

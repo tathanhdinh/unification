@@ -10,6 +10,8 @@
 #include <climits>
 //#include <memory>
 
+#define CAPTURED_INS_MAX_SIZE 1000
+
 extern "C" {
 #include <xed-interface.h>
 }
@@ -317,11 +319,13 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
 // BEGIN: static variables
 static KNOB<string> output_file_knob      (KNOB_MODE_WRITEONCE, "pintool", "out", "output.trace", "output trace file");
 static KNOB<UINT32> trace_max_length_knob (KNOB_MODE_WRITEONCE, "pintool", "length", "0", "limit length of trace (0 = no limit)");
+static KNOB<UINT32> cached_ins_count_knob (KNOB_MODE_WRITEONCE, "pintool", "cached", "0", "number of cached instruction (0 = no cached)");
 static KNOB<ADDRINT> start_address_knob   (KNOB_MODE_WRITEONCE, "pintool", "start", "0", "start address (0 = from beginning)");
 static KNOB<ADDRINT> stop_address_knob    (KNOB_MODE_WRITEONCE, "pintool", "stop", "0", "stop address (0 = until ending)");
 
 static UINT32 max_trace_length = 0;
 static UINT32 current_trace_length = 0;
+static UINT32 cached_ins_count = 0;
 
 static ADDRINT start_address;
 static ADDRINT stop_address;
@@ -330,6 +334,10 @@ static std::ofstream output_file;
 
 static std::map<THREADID, rt_instruction_t*> current_instruction_at_thread;
 static std::map<ADDRINT, instruction_t*> cached_instruction_at_address;
+
+static UINT8* cached_buffer = 0;
+static UINT32 current_cached_length = 0;
+static UINT32 current_cached_count = 0;
 
 static std::time_t start_time;
 static std::time_t stop_time;
@@ -518,12 +526,6 @@ static VOID save_stored_memory_callback(ADDRINT stored_addr, UINT32 stored_size,
   return;
 }
 
-//inline static bool should_add_to_trace(rt_instruction_t const* ins)
-//{
-//  UINT8 hi_addr = (ins->address) >> (CHAR_BIT * 3);
-//  return (hi_addr < 0x60);
-//}
-
 static VOID serialize_threaded_instruction_callback(THREADID thread_id)
 {
   //if (instruction_is_disabled) return;
@@ -532,15 +534,36 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
 
   //printf("add 0x%x\n", current_instruction_at_thread[thread_id]->address);
 
+  current_trace_length++;
   std::size_t serialized_length = current_instruction_at_thread[thread_id]->serialized_length();
 
-  // serialize size of serialized instruction: allow random access on the serialized trace
-  output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
+  if (cached_ins_count == 0) {
+    // serialize size of serialized instruction: allow random access on the serialized trace
+    output_file.write(reinterpret_cast<char*>(&serialized_length), sizeof(ADDRINT));
 
-  static UINT8 buffer[1000];
-  // UINT8 *buffer = new UINT8[serialized_length];
-  current_instruction_at_thread[thread_id]->serialize(buffer);
-  output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
+    static UINT8 buffer[1000];
+    // UINT8 *buffer = new UINT8[serialized_length];
+    current_instruction_at_thread[thread_id]->serialize(buffer);
+    output_file.write(reinterpret_cast<char*>(buffer), serialized_length);
+  }
+  else {
+    // serialize size of serialized instruction: allow random access on the serialized trace
+    reinterpret_cast<ADDRINT*>(cached_buffer + current_cached_length)[0] = serialized_length;
+    current_cached_length += sizeof(ADDRINT);
+
+    current_instruction_at_thread[thread_id]->serialize(cached_buffer + current_cached_length);
+    current_cached_length += serialized_length;
+    current_cached_count++;
+
+    if (current_cached_count == cached_ins_count) {
+      printf("flush %u instructions (%u bytes), current trace length: %u\n", 
+             current_cached_count, current_cached_length, current_trace_length);
+
+      output_file.write(reinterpret_cast<char*>(cached_buffer), current_cached_length);
+      current_cached_length = 0;
+      current_cached_count = 0;
+    }
+  }
   // delete [] buffer;
 
   // // reset serialized instruction
@@ -548,12 +571,12 @@ static VOID serialize_threaded_instruction_callback(THREADID thread_id)
   // current_instruction_at_thread[thread_id] = 0;
 
   // compare with maximal length (0 = no limit)
-  current_trace_length++;
+  
   //if (current_trace_length % 500000 == 0) std::cout << "traced instructions: " << current_trace_length 
   //                                                  << " (cached: " << cached_instruction_at_address.size() << ")"  << std::endl;
-  if (current_trace_length % 50000 == 0) std::cout << "traced instructions: " << current_trace_length << std::endl;
+  //if (current_trace_length % 50000 == 0) std::cout << "traced instructions: " << current_trace_length << std::endl;
 
-  output_file.flush(); // just for safe
+  //output_file.flush(); // just for safe
   if (current_trace_length >= max_trace_length && max_trace_length != 0) {
     PIN_ExitApplication(1);
   }
@@ -631,9 +654,20 @@ static VOID instrument_trace(TRACE trace, VOID *data)
   return;
 }
 
+static VOID initialize(VOID *data)
+{
+  if (cached_ins_count != 0) {
+    cached_buffer = new UINT8[CAPTURED_INS_MAX_SIZE * cached_ins_count];
+  }
+}
+
 static VOID finalize(INT32 code, VOID *data)
 {
   static_cast<void>(code); static_cast<void>(data);
+
+  if (cached_ins_count != 0 && current_cached_count != 0) {
+    output_file.write(reinterpret_cast<char*>(cached_buffer), current_cached_length);
+  }
 
   // clean cached instructions
   std::map<ADDRINT, instruction_t*>::iterator addr_ins_iter = cached_instruction_at_address.begin();
@@ -641,6 +675,10 @@ static VOID finalize(INT32 code, VOID *data)
     delete (*addr_ins_iter).second;
   }
   cached_instruction_at_address.clear();
+
+  if (cached_ins_count != 0) {
+    delete cached_buffer;
+  }
 
   output_file.close();
 
@@ -691,10 +729,16 @@ int main(int argc, char *argv[])
   max_trace_length = trace_max_length_knob.Value();
   start_address = start_address_knob.Value();
   stop_address = stop_address_knob.Value();
+  cached_ins_count = cached_ins_count_knob.Value();
 
   std::cout << "start tracing program: " << get_binary_name(argc, argv) << std::endl
             << "limit length: " << max_trace_length;
   if (max_trace_length == 0) std::cout << " (no limit)";
+
+  std::cout << std::endl 
+            << "cached instruction count: " << cached_ins_count;
+  if (cached_ins_count == 0) std::cout << " (no cached)";
+
   std::cout << std::endl
             << "start address: " << StringFromAddrint(start_address);
   if (start_address == 0) std::cout << " (from beginning)";
@@ -723,6 +767,7 @@ int main(int argc, char *argv[])
   output_file.write(reinterpret_cast<char*>(&basic_size), sizeof(UINT8));
 
   TRACE_AddInstrumentFunction(instrument_trace, 0);
+  PIN_AddApplicationStartFunction(initialize, 0);
   PIN_AddFiniFunction(finalize, 0);
 
   // start tracing
