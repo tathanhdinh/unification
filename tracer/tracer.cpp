@@ -412,8 +412,8 @@ static VOID save_previous_instruction_information(CONTEXT const *p_context, THRE
 // implement callback functions
 static VOID initialize_cached_instruction_callback(ADDRINT ins_addr, const CONTEXT *p_context, THREADID thread_id)
 {
-  instruction_is_disabled = (ins_addr >> (CHAR_BIT * 3)) >= 0x60;
-  if (instruction_is_disabled) return;
+  //instruction_is_disabled = (ins_addr >> (CHAR_BIT * 3)) >= 0x60;
+  //if (instruction_is_disabled) return;
 
   if (tracing_state == AfterStop) PIN_ExitApplication(0);
 
@@ -599,7 +599,8 @@ static VOID inject_callbacks(const INS& ins)
   // reinitialize them in this analysis function
   ADDRINT ins_addr = INS_Address(ins);
 
-  if (ins_addr >> (CHAR_BIT * 3) >= 0x60) return;
+  // omit instructions of Windows's APIs
+  if (ins_addr >> (CHAR_BIT * 3) > 0x0) return;
 
   if (cached_instruction_at_address.find(ins_addr) != cached_instruction_at_address.end()) {
     //cached_instruction_at_address[ins_addr] = new instruction_t(ins);
