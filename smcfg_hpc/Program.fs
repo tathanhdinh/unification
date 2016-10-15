@@ -302,5 +302,5 @@ let main argv =
           ignore <| printBasicBlockCfg basicBlockCfg outputFilename
           // Printf.printfn "done."
 
-      Printf.printfn "all done, elapsed time: %i ms" timer.ElapsedMilliseconds
+      Printf.printfn "all done, elapsed time: %u ms" timer.ElapsedMilliseconds
     1

@@ -11,6 +11,7 @@
 //#include <memory>
 
 #define CAPTURED_INS_MAX_SIZE 1000
+#define MAX_OPCODE_SIZE 15
 
 extern "C" {
 #include <xed-interface.h>
@@ -39,10 +40,25 @@ struct instruction_t
 
   BOOL has_fall_through;
 
+  bool operator==(const INS& ins);
+
   instruction_t(const INS& ins);
   instruction_t(const instruction_t& ins);
   virtual ~instruction_t();
 };
+
+
+bool instruction_t::operator==(const INS& ins) 
+{
+  unsigned int ins_size = INS_Size(ins);
+  if (this->opcode_size != ins_size) return false;
+
+  static UINT8 other_opcode_buffer[MAX_OPCODE_SIZE];
+  PIN_SafeCopy(other_opcode_buffer, reinterpret_cast<VOID*>(INS_Address(ins)), ins_size);
+  if (memcmp(this->opcode_buffer, other_opcode_buffer, ins_size) != 0) return false;
+
+  return true;
+}
 
 instruction_t::instruction_t(const INS& ins)
 {
@@ -600,13 +616,21 @@ static VOID inject_callbacks(const INS& ins)
   ADDRINT ins_addr = INS_Address(ins);
 
   // omit instructions of Windows's APIs
-  if (ins_addr >> (CHAR_BIT * 3) > 0x0) return;
+  if (ins_addr >> (CHAR_BIT * 3 + 4) > 0x0) return;
 
-  if (cached_instruction_at_address.find(ins_addr) != cached_instruction_at_address.end()) {
-    //cached_instruction_at_address[ins_addr] = new instruction_t(ins);
+  if (cached_instruction_at_address.find(ins_addr) == cached_instruction_at_address.end()) {
+    cached_instruction_at_address[ins_addr] = new instruction_t(ins);
+  }
+  else if (!(*cached_instruction_at_address[ins_addr] == ins)) {
+    delete cached_instruction_at_address[ins_addr];
+    cached_instruction_at_address[ins_addr] = new instruction_t(ins);
+  }
+
+  /*if (cached_instruction_at_address.find(ins_addr) != cached_instruction_at_address.end() && 
+      !(*cached_instruction_at_address[ins_addr] == ins)) {
     delete cached_instruction_at_address[ins_addr];
   }
-  cached_instruction_at_address[ins_addr] = new instruction_t(ins);
+  else cached_instruction_at_address[ins_addr] = new instruction_t(ins);*/
 
   instruction_t *instrumented_instruction = cached_instruction_at_address[ins_addr];
 
