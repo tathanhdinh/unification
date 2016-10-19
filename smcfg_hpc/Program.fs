@@ -1,13 +1,14 @@
 ﻿type Instruction<'TAddress> = { Address : 'TAddress;
                                 NextAddress : 'TAddress;
-                                Mnemonic: string
+                                Opcode : byte [];
+                                // Mnemonic: string;
                                 ThreadId : uint32 }
 
 type Trace<'TAddress> = Collections.ResizeArray<Instruction<'TAddress>>
 
 type InstructionSet<'TAddress when 'TAddress : comparison> = System.Collections.Generic.HashSet<Instruction<'TAddress>>
 
-type BaseControlFlow<'TAddress> = Instruction<'TAddress> * Instruction<'TAddress>
+//type BaseControlFlow<'TAddress> = Instruction<'TAddress> * Instruction<'TAddress>
 
 //type BaseControlFlows<'TAddress> = Collections.ResizeArray<BaseControlFlow<'TAddress>>
 
@@ -113,8 +114,8 @@ let extractBaseControlFlows<'TAddress  when 'TAddress : unmanaged and
     let serializedLength = genericRead<'TAddress> traceFileReader
     let address = genericRead<'TAddress> traceFileReader
     let nextAddress = genericRead<'TAddress> traceFileReader
-    deserializeOpcodeGeneric<'TAddress> traceFileReader |> ignore
-    let mnemonicStr = deserializeMnemonicGeneric<'TAddress> traceFileReader
+    let opcode = deserializeOpcodeGeneric<'TAddress> traceFileReader
+    // let mnemonicStr = deserializeMnemonicGeneric<'TAddress> traceFileReader
     deserializeRegMapGeneric<'TAddress> traceFileReader |> ignore
     deserializeRegMapGeneric<'TAddress> traceFileReader |> ignore
     deserializeMemMapGeneric<'TAddress> traceFileReader |> ignore
@@ -122,7 +123,8 @@ let extractBaseControlFlows<'TAddress  when 'TAddress : unmanaged and
     let threadId = traceFileReader.ReadUInt32 ()
     let newInstruction = { Address = address;
                            NextAddress = nextAddress;
-                           Mnemonic = mnemonicStr;
+                           Opcode = opcode;
+                          //  Mnemonic = mnemonicStr;
                            ThreadId = threadId }
 
     match entryPoint with
@@ -224,8 +226,13 @@ let constructBasicBlockCfg<'TAddress when 'TAddress : comparison> (basicBlocks:B
 
 let basicBlockLabel<'TAddress when 'TAddress : unmanaged and
                                    'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) =
+  use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+  disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+  // disassembler.Disassemble(ins.)
   List.fold (+) "" <| List.map (fun (ins:Instruction<_>) ->
-                                Printf.sprintf "%s  %s\l" (hexStringOfValue<'TAddress> ins.Address) ins.Mnemonic) basicBlock
+                                let capstoneIns = disassembler.Disassemble(ins.Opcode, 1)
+                                let insMnemonic = capstoneIns.[0].Mnemonic
+                                Printf.sprintf "%s  %s\l" (hexStringOfValue<'TAddress> ins.Address) insMnemonic) basicBlock
 
 type BasicBlockDotEngine () =
   interface QuickGraph.Graphviz.IDotEngine with
