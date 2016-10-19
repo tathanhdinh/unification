@@ -17,7 +17,7 @@ extern "C" {
 #include <xed-interface.h>
 }
 
-static bool instruction_is_disabled = false;
+// static bool instruction_is_disabled = false;
 
 // BEGIN: class instruction_t
 struct instruction_t
@@ -26,7 +26,7 @@ struct instruction_t
   ADDRINT next_address;
   USIZE opcode_size;
   UINT8* opcode_buffer;
-  std::string mnemonic_string;
+  // std::string mnemonic_string;
 
   std::map<REG, PIN_REGISTER> src_registers;
   std::map<REG, PIN_REGISTER> dst_registers;
@@ -69,7 +69,7 @@ instruction_t::instruction_t(const INS& ins)
   this->opcode_buffer = new UINT8[this->opcode_size];
   PIN_SafeCopy(this->opcode_buffer, reinterpret_cast<VOID*>(this->address), this->opcode_size);
 
-  this->mnemonic_string = INS_Disassemble(ins);
+  // this->mnemonic_string = INS_Disassemble(ins);
 
 //  std::cout << "create: " << StringFromAddrint(this->address) << " " << this->mnemonic_string << std::endl;
 
@@ -102,7 +102,7 @@ instruction_t::instruction_t(const INS& ins)
 instruction_t::instruction_t(const instruction_t &ins) : address(ins.address),
                                                          next_address(ins.next_address),
                                                          opcode_size(ins.opcode_size),
-                                                         mnemonic_string(ins.mnemonic_string),
+                                                         // mnemonic_string(ins.mnemonic_string),
                                                          src_registers(ins.src_registers),
                                                          dst_registers(ins.dst_registers),
                                                          is_fp(ins.is_fp),
@@ -174,8 +174,8 @@ std::size_t rt_instruction_t::serialized_length()
     sizeof(ADDRINT) +              // for next address
     sizeof(ADDRINT) +              // for opcode buffer length
     this->opcode_size +            // for opcode buffer
-    sizeof(ADDRINT) +              // for memonic string length
-    this->mnemonic_string.length(); // for mnemonic string
+    sizeof(ADDRINT);              // for memonic string length
+    // this->mnemonic_string.length(); // for mnemonic string
 
   std::size_t group1_length = sizeof(ADDRINT) + length_of_register_map(this->src_registers) + // for read registers
                               sizeof(ADDRINT) + length_of_register_map(this->dst_registers);  // for written registers
@@ -265,14 +265,13 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   std::memcpy(p_opcode, this->opcode_buffer, this->opcode_size);
   serialized_length += this->opcode_size;
 
-  ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size); // mnemonic size
-  *p_mnemonic_size = this->mnemonic_string.length();
-  serialized_length += sizeof(ADDRINT);
-//  std::cout << "mnemonic size: " << *p_mnemonic_size << std::endl;
+  // ADDRINT *p_mnemonic_size = reinterpret_cast<ADDRINT*>(p_opcode + this->opcode_size); // mnemonic size
+  // *p_mnemonic_size = this->mnemonic_string.length();
+  // serialized_length += sizeof(ADDRINT);
 
-  UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1); // mnemonic buffer
-  std::memcpy(p_mnemonic, this->mnemonic_string.c_str(), this->mnemonic_string.length());
-  serialized_length += this->mnemonic_string.length();
+  // UINT8 *p_mnemonic = reinterpret_cast<UINT8*>(p_mnemonic_size + 1); // mnemonic buffer
+  // std::memcpy(p_mnemonic, this->mnemonic_string.c_str(), this->mnemonic_string.length());
+  // serialized_length += this->mnemonic_string.length();
 
   // group 1
   buffer = original_buffer_addr + serialized_length;
