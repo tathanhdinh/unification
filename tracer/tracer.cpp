@@ -173,8 +173,8 @@ std::size_t rt_instruction_t::serialized_length()
     sizeof(ADDRINT) +              // for address
     sizeof(ADDRINT) +              // for next address
     sizeof(ADDRINT) +              // for opcode buffer length
-    this->opcode_size +            // for opcode buffer
-    sizeof(ADDRINT);              // for memonic string length
+    this->opcode_size;            // for opcode buffer
+    //sizeof(ADDRINT);              // for memonic string length
     // this->mnemonic_string.length(); // for mnemonic string
 
   std::size_t group1_length = sizeof(ADDRINT) + length_of_register_map(this->src_registers) + // for read registers
@@ -294,7 +294,6 @@ std::size_t rt_instruction_t::serialize(UINT8 *buffer)
   UINT8 *p_dst_reg_map = reinterpret_cast<UINT8*>(p_dst_reg_map_length + 1); // written register map
   serialize_register_map(p_dst_reg_map, this->dst_registers);
   serialized_length += *p_dst_reg_map_length;
-
 
   // group 2
   buffer = original_buffer_addr + serialized_length;

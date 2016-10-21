@@ -78,6 +78,7 @@ let getTraceLengthGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader
 let deserializeOpcodeGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   let opcodeSize = genericReadInt<'TAddress> traceFileReader
   let opcodeBuffer = traceFileReader.ReadBytes opcodeSize
+  // Printf.printfn "%A" opcodeBuffer
   opcodeBuffer
 
 (*================================================================================================================*)
@@ -103,8 +104,7 @@ let deserializeMemMapGeneric<'TAddress when 'TAddress : unmanaged> (traceFileRea
 
 (*================================================================================================================*)
 
-let extractBaseControlFlows<'TAddress  when 'TAddress : unmanaged and
-                                            'TAddress : comparison> (traceFileReader:System.IO.BinaryReader) =
+let extractBaseControlFlows<'TAddress  when 'TAddress : unmanaged and 'TAddress : comparison> (traceFileReader:System.IO.BinaryReader) =
   let mutable instructionCount = 0u
   let programControlFlow = new ControlFlows<_>()
   let mutable prevInstruction = None
@@ -115,7 +115,6 @@ let extractBaseControlFlows<'TAddress  when 'TAddress : unmanaged and
     let address = genericRead<'TAddress> traceFileReader
     let nextAddress = genericRead<'TAddress> traceFileReader
     let opcode = deserializeOpcodeGeneric<'TAddress> traceFileReader
-    // let mnemonicStr = deserializeMnemonicGeneric<'TAddress> traceFileReader
     deserializeRegMapGeneric<'TAddress> traceFileReader |> ignore
     deserializeRegMapGeneric<'TAddress> traceFileReader |> ignore
     deserializeMemMapGeneric<'TAddress> traceFileReader |> ignore
@@ -232,7 +231,8 @@ let basicBlockLabel<'TAddress when 'TAddress : unmanaged and
   List.fold (+) "" <| List.map (fun (ins:Instruction<_>) ->
                                 let capstoneIns = disassembler.Disassemble(ins.Opcode, 1)
                                 let insMnemonic = capstoneIns.[0].Mnemonic
-                                Printf.sprintf "%s  %s\l" (hexStringOfValue<'TAddress> ins.Address) insMnemonic) basicBlock
+                                let insOperand = capstoneIns.[0].Operand
+                                Printf.sprintf "%s  %s %s\l" (hexStringOfValue<'TAddress> ins.Address) insMnemonic insOperand) basicBlock
 
 type BasicBlockDotEngine () =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -250,6 +250,9 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
                                     args.VertexFormatter.Label <- basicBlockLabel basicBlock
                                     args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                     args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box)
+//  graphvizFormat.FormatEdge.Add(fun args -> 
+//                                  args.EdgeFormatter.HeadPort <- "n"
+//                                  args.EdgeFormatter.TailPort <- "s")
   graphvizFormat.Generate(new BasicBlockDotEngine(), outputFilename)
 
 (*================================================================================================================*)
@@ -271,10 +274,36 @@ let main argv =
       // x86_64 (nothing now)
       Printf.printfn "x86_64"
     else
-      Printf.printf "deserializing the trace and extracting the basic flows... "
-      // let nativeTrace = deserializeTrace<uint32> traceFileReader
-      let anEntryPoint, insCount, programControlFlow = extractBaseControlFlows<uint32> traceFileReader
-      Printf.printfn "done: %u parsed instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+      // let traceLength = getTraceLengthGeneric<uint32> traceFileReader
+      // Printf.printfn "trace length = %u instructions" traceLength
+
+      let anEntryPoint, insCount, programControlFlow =
+        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+        if System.IO.File.Exists serializedFilename then
+          Printf.printfn "restore the serialized data... "
+          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
+          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+          let serializedData = formatter.Deserialize(inputFileStream)
+          unbox serializedData
+        else
+          Printf.printf "deserializing the trace and extracting the basic flows... "
+          let extractedData = extractBaseControlFlows<uint32> traceFileReader
+          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+          Printf.printf "save the deserialized data... "
+          formatter.Serialize(outputFileStream, box extractedData)
+          extractedData
+      
+      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+
+//      Printf.printf "deserializing the trace and extracting the basic flows... "
+//      let anEntryPoint, insCount, programControlFlow = extractBaseControlFlows<uint32> traceFileReader
+//      Printf.printfn "done: %u parsed instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+//
+//      let outputFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+//      use outputFileStream = new System.IO.FileStream(outputFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+//      let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+//      formatter.Serialize(outputFileStream, box (anEntryPoint, insCount, programControlFlow))
 
       match anEntryPoint with
       | None -> Printf.printfn "trace is empty."
