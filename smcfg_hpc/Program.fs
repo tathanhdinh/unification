@@ -246,7 +246,17 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
   let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(basicBlockCfg)
   graphvizFormat.FormatVertex.Add(fun args ->
                                     let basicBlock = args.Vertex
-                                    args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
+                                    args.VertexFormatter.Style.Add(QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded) |> ignore
+                                    if basicBlockCfg.OutDegree(basicBlock) = 0 then
+                                      args.VertexFormatter.Style.Add(QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled) |> ignore
+                                      args.VertexFormatter.FillColor <- new QuickGraph.Graphviz.Dot.GraphvizColor(0uy, 220uy, 220uy, 220uy) // gainsboro
+                                    elif basicBlockCfg.InDegree(basicBlock) > 2 then
+                                      args.VertexFormatter.Style.Add(QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled) |> ignore
+                                      args.VertexFormatter.FillColor <- new QuickGraph.Graphviz.Dot.GraphvizColor(0uy, 191uy, 62uy, 255uy) // darkorchi1
+                                    elif basicBlockCfg.OutDegree(basicBlock) > 2 then
+                                      args.VertexFormatter.Style.Add(QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled) |> ignore
+                                      args.VertexFormatter.FillColor <- new QuickGraph.Graphviz.Dot.GraphvizColor(0uy, 255uy, 185uy, 15uy) // darkgoldenrod1
+//                                    args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
                                     args.VertexFormatter.Label <- basicBlockLabel basicBlock
                                     args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                     args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box)
