@@ -45,6 +45,12 @@ let hexStringOfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
     | :? uint64 as uint64Addr -> Printf.sprintf "0x%x" uint64Addr
     | _ -> failwith "unknown type parameter"
 
+let int64OfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) = 
+  match box insAddr with
+  | :? uint32 as uint32Addr -> int64 uint32Addr
+  | :? uint64 as uint64Addr -> int64 uint64Addr
+  | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -224,15 +230,15 @@ let constructBasicBlockCfg<'TAddress when 'TAddress : comparison> (basicBlocks:B
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlockEdges
 
 let basicBlockLabel<'TAddress when 'TAddress : unmanaged and
-                                   'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) =
-  use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
-  disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+                                   'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (disassembler:Gee.External.Capstone.CapstoneDisassembler<_,_,_,_>) =
+//  use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+//  disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel²
   // disassembler.Disassemble(ins.)
   List.fold (+) "" <| List.map (fun (ins:Instruction<_>) ->
-                                let capstoneIns = disassembler.Disassemble(ins.Opcode, 1)
+                                let capstoneIns = disassembler.Disassemble(ins.Opcode, 1, (int64OfValue ins.Address))
                                 let insMnemonic = capstoneIns.[0].Mnemonic
                                 let insOperand = capstoneIns.[0].Operand
-                                Printf.sprintf "%s  %s %s\l" (hexStringOfValue<'TAddress> ins.Address) insMnemonic insOperand) basicBlock
+                                Printf.sprintf "%s  %s %s\l" (hexStringOfValue ins.Address) insMnemonic insOperand) basicBlock
 
 type BasicBlockDotEngine () =
   interface QuickGraph.Graphviz.IDotEngine with
@@ -242,7 +248,7 @@ type BasicBlockDotEngine () =
 
 let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
                                       'TAddress : comparison> (basicBlockCfg:BasicBlockCfg<'TAddress>)
-                                                              (outputFilename:string) =
+                                                              (outputFilename:string) disassembler =
   let graphvizFormat = QuickGraph.Graphviz.GraphvizAlgorithm(basicBlockCfg)
   graphvizFormat.FormatVertex.Add(fun args ->
                                     let basicBlock = args.Vertex
@@ -257,7 +263,7 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
                                       args.VertexFormatter.Style.Add(QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Filled) |> ignore
                                       args.VertexFormatter.FillColor <- new QuickGraph.Graphviz.Dot.GraphvizColor(0uy, 255uy, 185uy, 15uy) // darkgoldenrod1
 //                                    args.VertexFormatter.Style <- QuickGraph.Graphviz.Dot.GraphvizVertexStyle.Rounded
-                                    args.VertexFormatter.Label <- basicBlockLabel basicBlock
+                                    args.VertexFormatter.Label <- basicBlockLabel basicBlock disassembler
                                     args.VertexFormatter.Font <- QuickGraph.Graphviz.Dot.GraphvizFont("Source Code Pro", 12.0f)
                                     args.VertexFormatter.Shape <- QuickGraph.Graphviz.Dot.GraphvizVertexShape.Box)
 //  graphvizFormat.FormatEdge.Add(fun args -> 
@@ -282,7 +288,62 @@ let main argv =
 
     if addrIntSize = 8uy then
       // x86_64 (nothing now)
-      Printf.printfn "x86_64"
+//      Printf.printfn "x86_64"
+      let anEntryPoint, insCount, programControlFlow =
+        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+        if System.IO.File.Exists serializedFilename then
+          Printf.printfn "restore the serialized data... "
+          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
+          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+          let serializedData = formatter.Deserialize(inputFileStream)
+          unbox serializedData
+        else
+          Printf.printf "deserializing the trace and extracting the basic flows... "
+          let extractedData = extractBaseControlFlows<uint64> traceFileReader
+          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+          Printf.printf "save the deserialized data... "
+          formatter.Serialize(outputFileStream, box extractedData)
+          extractedData
+      
+      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+
+      match anEntryPoint with
+      | None -> Printf.printfn "trace is empty."
+      | Some entryPoint ->
+          Printf.printf "constructing the base control flow graph... "
+          let baseCfg = constructBaseCfgFromControlFlows programControlFlow
+          Printf.printfn "done: %u vertices." baseCfg.VertexCount
+
+          Printf.printf "building basic blocks... "
+          // let entryPoint = fst <| Seq.head programControlFlow
+          let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
+          Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
+
+          Printf.printf "removing the trivial flows... "
+          // for flow in trivialControlFlows do
+          //   programControlFlow.Remove flow |> ignore
+          for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
+            for dstIns in trivialDstInss do
+              programControlFlow.[srcIns].Remove dstIns |> ignore
+          // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
+
+          
+          Printf.printf "constructing the control flow graph..."
+          let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
+          Printf.printfn "done."
+
+          let outputFilename =
+            if Array.length argv > 1 then
+              argv.[1]
+            else
+              System.IO.Path.ChangeExtension(argv.[0], ".dot")
+          Printf.printfn "write the control flow graph to %s" outputFilename
+
+          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+
+          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
     else
       // let traceLength = getTraceLengthGeneric<uint32> traceFileReader
       // Printf.printfn "trace length = %u instructions" traceLength
@@ -345,7 +406,10 @@ let main argv =
             else
               System.IO.Path.ChangeExtension(argv.[0], ".dot")
           Printf.printfn "write the control flow graph to %s" outputFilename
-          ignore <| printBasicBlockCfg basicBlockCfg outputFilename
+
+          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit64)
+          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
           // Printf.printfn "done."
 
       Printf.printfn "all done, elapsed time: %u ms" timer.ElapsedMilliseconds
