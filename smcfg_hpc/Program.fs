@@ -51,6 +51,12 @@ let int64OfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
   | :? uint64 as uint64Addr -> int64 uint64Addr
   | _ -> failwith "unknown type parameter"
 
+let genericBytesCast<'TAddress when 'TAddress : unmanaged> (bytes:byte[]) =
+  match typeof<'TAddress> with
+  | t when t = typeof<uint32> -> unbox<'TAddress> (box <| System.BitConverter.ToUInt32(bytes, 0))
+  | t when t = typeof<uint64> -> unbox<'TAddress> (box <| System.BitConverter.ToUInt64(bytes, 0))
+  | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -68,6 +74,15 @@ let genericReadInt<'TAddress when 'TAddress : unmanaged> (traceFileReader : Syst
     | t when t = typeof<uint32> -> int <| traceFileReader.ReadUInt32()
     | t when t = typeof<uint64> -> int <| traceFileReader.ReadUInt64()
     | _ -> failwith "unknown type parameter"
+
+let genericIntelDisassembler<'TAddress when 'TAddress : unmanaged> () =
+  let disassembler = 
+    match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+    | t when t = typeof<uint64> -> Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit64)
+    | _ -> failwith "unknown type parameter"
+  disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+  disassembler
 
 (*================================================================================================================*)
 
@@ -105,9 +120,10 @@ let deserializeRegMapGeneric<'TAddress when 'TAddress : unmanaged> (traceFileRea
     let regNameLength = genericReadInt<'TAddress> traceFileReader
     let regNameBuffer = traceFileReader.ReadBytes regNameLength
     let regName = System.Text.Encoding.ASCII.GetString regNameBuffer
-    let regValue = genericRead<'TAddress> traceFileReader
+//    let regValue = genericRead<'TAddress> traceFileReader
+    let regValue = genericBytesCast<'TAddress> <| traceFileReader.ReadBytes (sizeof<'TAddress> * 8)
     regMap.Add (regName, regValue)
-    offset <- offset + sizeof<'TAddress> + regNameLength + sizeof<'TAddress>
+    offset <- offset + sizeof<'TAddress> + regNameLength + (sizeof<'TAddress> * 8)
 //  regMapBuffer
   List.ofSeq regMap
 
@@ -149,20 +165,21 @@ let printTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> 
     let readMemMap = deserializeMemMapGeneric<'TAddress> traceFileReader
     let writtenMemMap = deserializeMemMapGeneric<'TAddress> traceFileReader
     let threadId = traceFileReader.ReadUInt32 ()
-    let insStr = Printf.sprintf "%s  %s" (hexStringOfValue address) (disassembleOpcode disassembler opcode (int64OfValue address))
+    let insStr = Printf.sprintf "%s  %-40s" (hexStringOfValue address) (disassembleOpcode disassembler opcode (int64OfValue address))
     traceStreamWriter.Write insStr
     List.iter (fun (regName, regValue) -> 
-                let regStr = Printf.sprintf "%s:%s:R" regName (hexStringOfValue regValue)
+                let regStr = Printf.sprintf "[%s:%s:R]" regName (hexStringOfValue regValue)
                 traceStreamWriter.Write regStr) readRegMap
     List.iter (fun (regName, regValue) ->
-                let regStr = Printf.sprintf "%s:%s:W" regName (hexStringOfValue regValue)
+                let regStr = Printf.sprintf "[%s:%s:W]" regName (hexStringOfValue regValue)
                 traceStreamWriter.Write regStr) writtenRegMap
     List.iter (fun (memAddr, memValue) -> 
-                let memStr = Printf.sprintf "%s:0x%x:R" (hexStringOfValue memAddr) memValue
+                let memStr = Printf.sprintf "[%s:0x%x:R]" (hexStringOfValue memAddr) memValue
                 traceStreamWriter.Write memStr) readMemMap
     List.iter (fun (memAddr, memValue) -> 
-                let memStr = Printf.sprintf "%s:0x%x:W" (hexStringOfValue memAddr) memValue
+                let memStr = Printf.sprintf "[%s:0x%x:W]" (hexStringOfValue memAddr) memValue
                 traceStreamWriter.Write memStr) writtenMemMap
+    traceStreamWriter.WriteLine()
 
     // traceStreamWriter.Write insStr
 
@@ -390,10 +407,27 @@ let processTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison
           System.IO.Path.ChangeExtension(argv.[0], ".dot")
       Printf.printfn "write the control flow graph to %s" outputFilename
 
-      use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
-      disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+//      use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+//      disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+      use disassembler = genericIntelDisassembler<'TAddress> ()
 
       ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
+
+(*================================================================================================================*)
+
+let processTraceSimple<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (argv:string[]) (traceFileReader:System.IO.BinaryReader) =
+  let outputFilename =
+    if argv.Length > 1 then
+      argv.[1]
+    else
+      System.IO.Path.ChangeExtension(argv.[0], ".txt")
+  Printf.printfn "write trace to %s" outputFilename
+
+  use traceOutputStreamWriter = new System.IO.StreamWriter(outputFilename)
+  use disassembler = genericIntelDisassembler<'TAddress> ()
+  printTrace<'TAddress> traceOutputStreamWriter traceFileReader disassembler
+
+  traceOutputStreamWriter.Close()
 
 (*================================================================================================================*)
 
@@ -411,7 +445,9 @@ let main argv =
     Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrIntSize boolSize threadIdSize
 
     if addrIntSize = 8uy then
-      processTrace<uint64> argv traceFileReader
+//      processTrace<uint64> argv traceFileReader
+      processTraceSimple<uint64> argv traceFileReader
+
       // x86_64 (nothing now)
 //      Printf.printfn "x86_64"
 //      let anEntryPoint, insCount, programControlFlow =
@@ -470,7 +506,9 @@ let main argv =
 //
 //          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
     else
-      processTrace<uint32> argv traceFileReader
+//      processTrace<uint32> argv traceFileReader
+      processTraceSimple<uint32> argv traceFileReader
+
       // let traceLength = getTraceLengthGeneric<uint32> traceFileReader
       // Printf.printfn "trace length = %u instructions" traceLength
 
@@ -539,4 +577,5 @@ let main argv =
 //          // Printf.printfn "done."
 //
 //      Printf.printfn "all done, elapsed time: %u ms" timer.ElapsedMilliseconds
+    traceFileReader.Close()
     1
