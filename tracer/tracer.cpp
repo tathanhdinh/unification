@@ -614,7 +614,8 @@ static VOID inject_callbacks(const INS& ins)
   ADDRINT ins_addr = INS_Address(ins);
 
   // omit instructions of Windows's APIs
-  if (ins_addr >> (CHAR_BIT * 3 + 4) > 0x0) return;
+  // if (ins_addr >> (CHAR_BIT * 3 + 4) > 0x0) return;
+  if (ins_addr >> (CHAR_BIT * 3) > 0x0) return;
 
   if (cached_instruction_at_address.find(ins_addr) == cached_instruction_at_address.end()) {
     cached_instruction_at_address[ins_addr] = new instruction_t(ins);
