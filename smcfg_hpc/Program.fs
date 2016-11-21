@@ -51,6 +51,12 @@ let int64OfValue<'TAddress when 'TAddress : unmanaged> (insAddr:'TAddress) =
   | :? uint64 as uint64Addr -> int64 uint64Addr
   | _ -> failwith "unknown type parameter"
 
+let genericBytesCast<'TAddress when 'TAddress : unmanaged> (bytes:byte[]) =
+  match typeof<'TAddress> with
+  | t when t = typeof<uint32> -> unbox<'TAddress> (box <| System.BitConverter.ToUInt32(bytes, 0))
+  | t when t = typeof<uint64> -> unbox<'TAddress> (box <| System.BitConverter.ToUInt64(bytes, 0))
+  | _ -> failwith "unknown type parameter"
+
 let parseTraceHeader (traceFileReader:System.IO.BinaryReader) =
   let addrintSize = traceFileReader.ReadByte ()
   let boolSize = traceFileReader.ReadByte ()
@@ -68,6 +74,15 @@ let genericReadInt<'TAddress when 'TAddress : unmanaged> (traceFileReader : Syst
     | t when t = typeof<uint32> -> int <| traceFileReader.ReadUInt32()
     | t when t = typeof<uint64> -> int <| traceFileReader.ReadUInt64()
     | _ -> failwith "unknown type parameter"
+
+let genericIntelDisassembler<'TAddress when 'TAddress : unmanaged> () =
+  let disassembler = 
+    match typeof<'TAddress> with
+    | t when t = typeof<uint32> -> Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+    | t when t = typeof<uint64> -> Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit64)
+    | _ -> failwith "unknown type parameter"
+  disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+  disassembler
 
 (*================================================================================================================*)
 
@@ -98,15 +113,76 @@ let deserializeMnemonicGeneric<'TAddress when 'TAddress : unmanaged> (traceFileR
 
 let deserializeRegMapGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   let regMapLength = genericReadInt<'TAddress> traceFileReader
-  let regMapBuffer = traceFileReader.ReadBytes regMapLength
-  regMapBuffer
+//  let regMapBuffer = traceFileReader.ReadBytes regMapLength
+  let regMap = new ResizeArray<_>()
+  let mutable offset = 0
+  while (offset < regMapLength) do
+    let regNameLength = genericReadInt<'TAddress> traceFileReader
+    let regNameBuffer = traceFileReader.ReadBytes regNameLength
+    let regName = System.Text.Encoding.ASCII.GetString regNameBuffer
+//    let regValue = genericRead<'TAddress> traceFileReader
+    let regValue = genericBytesCast<'TAddress> <| traceFileReader.ReadBytes (sizeof<'TAddress> * 8)
+    regMap.Add (regName, regValue)
+    offset <- offset + sizeof<'TAddress> + regNameLength + (sizeof<'TAddress> * 8)
+//  regMapBuffer
+  List.ofSeq regMap
 
 (*================================================================================================================*)
 
 let deserializeMemMapGeneric<'TAddress when 'TAddress : unmanaged> (traceFileReader:System.IO.BinaryReader) =
   let memMapLength = genericReadInt<'TAddress> traceFileReader
-  let memMapBuffer = traceFileReader.ReadBytes memMapLength
-  memMapBuffer
+//  let memMapBuffer = traceFileReader.ReadBytes memMapLength
+  let memMap = new ResizeArray<_>()
+  let mutable offset = 0
+  while (offset < memMapLength) do
+    let memAddr = genericRead<'TAddress> traceFileReader
+    let memValue = traceFileReader.ReadByte()
+    memMap.Add (memAddr, memValue)
+    offset <- offset + sizeof<'TAddress> + sizeof<byte>
+  List.ofSeq memMap
+//  memMapBuffer
+
+(*================================================================================================================*)
+
+let disassembleOpcode (disassembler:Gee.External.Capstone.CapstoneDisassembler<_,_,_,_>) (opcode:byte[]) (baseAddress:int64) =
+  let capstoneIns = disassembler.Disassemble(opcode, 1, baseAddress).[0]
+  let insMnemonic = capstoneIns.Mnemonic
+  let insOperand = capstoneIns.Operand
+  Printf.sprintf "%s %s" insMnemonic insOperand
+
+(*================================================================================================================*)
+
+let printTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (traceStreamWriter:System.IO.StreamWriter) 
+                                                                                  (traceFileReader:System.IO.BinaryReader) 
+                                                                                  (disassembler:Gee.External.Capstone.CapstoneDisassembler<_,_,_,_>) =
+  while traceFileReader.BaseStream.Position <> traceFileReader.BaseStream.Length do
+    let serializedLength = genericRead<'TAddress> traceFileReader
+    let address = genericRead<'TAddress> traceFileReader
+    let nextAddress = genericRead<'TAddress> traceFileReader
+    let opcode = deserializeOpcodeGeneric<'TAddress> traceFileReader
+    let readRegMap = deserializeRegMapGeneric<'TAddress> traceFileReader
+    let writtenRegMap = deserializeRegMapGeneric<'TAddress> traceFileReader
+    let readMemMap = deserializeMemMapGeneric<'TAddress> traceFileReader
+    let writtenMemMap = deserializeMemMapGeneric<'TAddress> traceFileReader
+    let threadId = traceFileReader.ReadUInt32 ()
+    let insStr = Printf.sprintf "%s  %-40s" (hexStringOfValue address) (disassembleOpcode disassembler opcode (int64OfValue address))
+    traceStreamWriter.Write insStr
+    List.iter (fun (regName, regValue) -> 
+                let regStr = Printf.sprintf "[%s:%s:R]" regName (hexStringOfValue regValue)
+                traceStreamWriter.Write regStr) readRegMap
+    List.iter (fun (regName, regValue) ->
+                let regStr = Printf.sprintf "[%s:%s:W]" regName (hexStringOfValue regValue)
+                traceStreamWriter.Write regStr) writtenRegMap
+    List.iter (fun (memAddr, memValue) -> 
+                let memStr = Printf.sprintf "[%s:0x%x:R]" (hexStringOfValue memAddr) memValue
+                traceStreamWriter.Write memStr) readMemMap
+    List.iter (fun (memAddr, memValue) -> 
+                let memStr = Printf.sprintf "[%s:0x%x:W]" (hexStringOfValue memAddr) memValue
+                traceStreamWriter.Write memStr) writtenMemMap
+    traceStreamWriter.WriteLine()
+
+    // traceStreamWriter.Write insStr
+
 
 (*================================================================================================================*)
 
@@ -211,6 +287,8 @@ let targetInstructions<'TAddress when 'TAddress : comparison> (basicBlock:BasicB
   let outControlFlows = baseCfg.OutEdges(lastInstruction)
   Seq.map (fun (edge:QuickGraph.SEdge<Instruction<_>>) -> edge.Target) outControlFlows
 
+(*================================================================================================================*)
+
 let constructBasicBlockCfg<'TAddress when 'TAddress : comparison> (basicBlocks:BasicBlocks<'TAddress>)
                                                                   (controlFlows:ControlFlows<'TAddress>) =
   // controlFlows.Sort()
@@ -229,6 +307,8 @@ let constructBasicBlockCfg<'TAddress when 'TAddress : comparison> (basicBlocks:B
   let basicBlockEdges = Collections.Seq.map (fun (src, dst) -> QuickGraph.SEdge(src, dst)) basicBlockControlFlows
   QuickGraph.GraphExtensions.ToBidirectionalGraph basicBlockEdges
 
+(*================================================================================================================*)
+
 let basicBlockLabel<'TAddress when 'TAddress : unmanaged and
                                    'TAddress : comparison> (basicBlock:BasicBlock<'TAddress>) (disassembler:Gee.External.Capstone.CapstoneDisassembler<_,_,_,_>) =
 //  use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
@@ -245,6 +325,8 @@ type BasicBlockDotEngine () =
     member this.Run (imgType:QuickGraph.Graphviz.Dot.GraphvizImageType, dotString:string, outputFilename:string) =
       System.IO.File.WriteAllText(outputFilename, dotString)
       outputFilename
+
+(*================================================================================================================*)
 
 let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
                                       'TAddress : comparison> (basicBlockCfg:BasicBlockCfg<'TAddress>)
@@ -273,6 +355,82 @@ let printBasicBlockCfg<'TAddress when 'TAddress : unmanaged and
 
 (*================================================================================================================*)
 
+let processTrace<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (argv:string[]) (traceFileReader:System.IO.BinaryReader) =
+  let anEntryPoint, insCount, programControlFlow =
+    let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+    if System.IO.File.Exists serializedFilename then
+      Printf.printfn "restore the serialized data... "
+      use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
+      let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+      let serializedData = formatter.Deserialize(inputFileStream)
+      unbox serializedData
+    else
+      Printf.printf "deserializing the trace and extracting the basic flows... "
+      let extractedData = extractBaseControlFlows<'TAddress> traceFileReader
+      use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+      let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+      Printf.printf "save the deserialized data... "
+      formatter.Serialize(outputFileStream, box extractedData)
+      extractedData
+      
+  Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+
+  match anEntryPoint with
+  | None -> Printf.printfn "trace is empty."
+  | Some entryPoint ->
+      Printf.printf "constructing the base control flow graph... "
+      let baseCfg = constructBaseCfgFromControlFlows programControlFlow
+      Printf.printfn "done: %u vertices." baseCfg.VertexCount
+
+      Printf.printf "building basic blocks... "
+      // let entryPoint = fst <| Seq.head programControlFlow
+      let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
+      Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
+
+      Printf.printf "removing the trivial flows... "
+      // for flow in trivialControlFlows do
+      //   programControlFlow.Remove flow |> ignore
+      for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
+        for dstIns in trivialDstInss do
+          programControlFlow.[srcIns].Remove dstIns |> ignore
+      // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
+
+          
+      Printf.printf "constructing the control flow graph..."
+      let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
+      Printf.printfn "done."
+
+      let outputFilename =
+        if Array.length argv > 1 then
+          argv.[1]
+        else
+          System.IO.Path.ChangeExtension(argv.[0], ".dot")
+      Printf.printfn "write the control flow graph to %s" outputFilename
+
+//      use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+//      disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+      use disassembler = genericIntelDisassembler<'TAddress> ()
+
+      ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
+
+(*================================================================================================================*)
+
+let processTraceSimple<'TAddress when 'TAddress : unmanaged and 'TAddress : comparison> (argv:string[]) (traceFileReader:System.IO.BinaryReader) =
+  let outputFilename =
+    if argv.Length > 1 then
+      argv.[1]
+    else
+      System.IO.Path.ChangeExtension(argv.[0], ".txt")
+  Printf.printfn "write trace to %s" outputFilename
+
+  use traceOutputStreamWriter = new System.IO.StreamWriter(outputFilename)
+  use disassembler = genericIntelDisassembler<'TAddress> ()
+  printTrace<'TAddress> traceOutputStreamWriter traceFileReader disassembler
+
+  traceOutputStreamWriter.Close()
+
+(*================================================================================================================*)
+
 [<EntryPoint>]
 let main argv =
   if Array.length argv < 1 then
@@ -287,130 +445,137 @@ let main argv =
     Printf.printfn "data sizes: (ADDRINT: %d), (BOOL: %d), (THREADID: %d)" addrIntSize boolSize threadIdSize
 
     if addrIntSize = 8uy then
+//      processTrace<uint64> argv traceFileReader
+      processTraceSimple<uint64> argv traceFileReader
+
       // x86_64 (nothing now)
 //      Printf.printfn "x86_64"
-      let anEntryPoint, insCount, programControlFlow =
-        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
-        if System.IO.File.Exists serializedFilename then
-          Printf.printfn "restore the serialized data... "
-          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
-          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
-          let serializedData = formatter.Deserialize(inputFileStream)
-          unbox serializedData
-        else
-          Printf.printf "deserializing the trace and extracting the basic flows... "
-          let extractedData = extractBaseControlFlows<uint64> traceFileReader
-          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
-          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
-          Printf.printf "save the deserialized data... "
-          formatter.Serialize(outputFileStream, box extractedData)
-          extractedData
-      
-      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
-
-      match anEntryPoint with
-      | None -> Printf.printfn "trace is empty."
-      | Some entryPoint ->
-          Printf.printf "constructing the base control flow graph... "
-          let baseCfg = constructBaseCfgFromControlFlows programControlFlow
-          Printf.printfn "done: %u vertices." baseCfg.VertexCount
-
-          Printf.printf "building basic blocks... "
-          // let entryPoint = fst <| Seq.head programControlFlow
-          let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
-          Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
-
-          Printf.printf "removing the trivial flows... "
-          // for flow in trivialControlFlows do
-          //   programControlFlow.Remove flow |> ignore
-          for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
-            for dstIns in trivialDstInss do
-              programControlFlow.[srcIns].Remove dstIns |> ignore
-          // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
-
-          
-          Printf.printf "constructing the control flow graph..."
-          let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
-          Printf.printfn "done."
-
-          let outputFilename =
-            if Array.length argv > 1 then
-              argv.[1]
-            else
-              System.IO.Path.ChangeExtension(argv.[0], ".dot")
-          Printf.printfn "write the control flow graph to %s" outputFilename
-
-          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
-          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
-
-          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
+//      let anEntryPoint, insCount, programControlFlow =
+//        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+//        if System.IO.File.Exists serializedFilename then
+//          Printf.printfn "restore the serialized data... "
+//          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
+//          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+//          let serializedData = formatter.Deserialize(inputFileStream)
+//          unbox serializedData
+//        else
+//          Printf.printf "deserializing the trace and extracting the basic flows... "
+//          let extractedData = extractBaseControlFlows<uint64> traceFileReader
+//          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+//          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+//          Printf.printf "save the deserialized data... "
+//          formatter.Serialize(outputFileStream, box extractedData)
+//          extractedData
+//      
+//      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+//
+//      match anEntryPoint with
+//      | None -> Printf.printfn "trace is empty."
+//      | Some entryPoint ->
+//          Printf.printf "constructing the base control flow graph... "
+//          let baseCfg = constructBaseCfgFromControlFlows programControlFlow
+//          Printf.printfn "done: %u vertices." baseCfg.VertexCount
+//
+//          Printf.printf "building basic blocks... "
+//          // let entryPoint = fst <| Seq.head programControlFlow
+//          let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
+//          Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
+//
+//          Printf.printf "removing the trivial flows... "
+//          // for flow in trivialControlFlows do
+//          //   programControlFlow.Remove flow |> ignore
+//          for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
+//            for dstIns in trivialDstInss do
+//              programControlFlow.[srcIns].Remove dstIns |> ignore
+//          // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
+//
+//          
+//          Printf.printf "constructing the control flow graph..."
+//          let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
+//          Printf.printfn "done."
+//
+//          let outputFilename =
+//            if Array.length argv > 1 then
+//              argv.[1]
+//            else
+//              System.IO.Path.ChangeExtension(argv.[0], ".dot")
+//          Printf.printfn "write the control flow graph to %s" outputFilename
+//
+//          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit32)
+//          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+//
+//          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
     else
+//      processTrace<uint32> argv traceFileReader
+      processTraceSimple<uint32> argv traceFileReader
+
       // let traceLength = getTraceLengthGeneric<uint32> traceFileReader
       // Printf.printfn "trace length = %u instructions" traceLength
 
-      let anEntryPoint, insCount, programControlFlow =
-        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
-        if System.IO.File.Exists serializedFilename then
-          Printf.printfn "restore the serialized data... "
-          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
-          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
-          let serializedData = formatter.Deserialize(inputFileStream)
-          unbox serializedData
-        else
-          Printf.printf "deserializing the trace and extracting the basic flows... "
-          let extractedData = extractBaseControlFlows<uint32> traceFileReader
-          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
-          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
-          Printf.printf "save the deserialized data... "
-          formatter.Serialize(outputFileStream, box extractedData)
-          extractedData
-      
-      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
-
-//      Printf.printf "deserializing the trace and extracting the basic flows... "
-//      let anEntryPoint, insCount, programControlFlow = extractBaseControlFlows<uint32> traceFileReader
-//      Printf.printfn "done: %u parsed instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+//      let anEntryPoint, insCount, programControlFlow =
+//        let serializedFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+//        if System.IO.File.Exists serializedFilename then
+//          Printf.printfn "restore the serialized data... "
+//          use inputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Open, System.IO.FileAccess.Read)
+//          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+//          let serializedData = formatter.Deserialize(inputFileStream)
+//          unbox serializedData
+//        else
+//          Printf.printf "deserializing the trace and extracting the basic flows... "
+//          let extractedData = extractBaseControlFlows<uint32> traceFileReader
+//          use outputFileStream = new System.IO.FileStream(serializedFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+//          let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+//          Printf.printf "save the deserialized data... "
+//          formatter.Serialize(outputFileStream, box extractedData)
+//          extractedData
+//      
+//      Printf.printfn "done: %u parsed/deserialized instructions (%u distinguished)." insCount programControlFlow.Keys.Count
 //
-//      let outputFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
-//      use outputFileStream = new System.IO.FileStream(outputFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
-//      let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
-//      formatter.Serialize(outputFileStream, box (anEntryPoint, insCount, programControlFlow))
-
-      match anEntryPoint with
-      | None -> Printf.printfn "trace is empty."
-      | Some entryPoint ->
-          Printf.printf "constructing the base control flow graph... "
-          let baseCfg = constructBaseCfgFromControlFlows programControlFlow
-          Printf.printfn "done: %u vertices." baseCfg.VertexCount
-
-          Printf.printf "building basic blocks... "
-          // let entryPoint = fst <| Seq.head programControlFlow
-          let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
-          Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
-
-          Printf.printf "removing the trivial flows... "
-          // for flow in trivialControlFlows do
-          //   programControlFlow.Remove flow |> ignore
-          for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
-            for dstIns in trivialDstInss do
-              programControlFlow.[srcIns].Remove dstIns |> ignore
-          // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
-
-          Printf.printf "constructing the control flow graph..."
-          let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
-          Printf.printfn "done."
-
-          let outputFilename =
-            if Array.length argv > 1 then
-              argv.[1]
-            else
-              System.IO.Path.ChangeExtension(argv.[0], ".dot")
-          Printf.printfn "write the control flow graph to %s" outputFilename
-
-          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit64)
-          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
-          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
-          // Printf.printfn "done."
-
-      Printf.printfn "all done, elapsed time: %u ms" timer.ElapsedMilliseconds
+////      Printf.printf "deserializing the trace and extracting the basic flows... "
+////      let anEntryPoint, insCount, programControlFlow = extractBaseControlFlows<uint32> traceFileReader
+////      Printf.printfn "done: %u parsed instructions (%u distinguished)." insCount programControlFlow.Keys.Count
+////
+////      let outputFilename = System.IO.Path.ChangeExtension(argv.[0], ".smc")
+////      use outputFileStream = new System.IO.FileStream(outputFilename, System.IO.FileMode.Create, System.IO.FileAccess.Write)
+////      let formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()
+////      formatter.Serialize(outputFileStream, box (anEntryPoint, insCount, programControlFlow))
+//
+//      match anEntryPoint with
+//      | None -> Printf.printfn "trace is empty."
+//      | Some entryPoint ->
+//          Printf.printf "constructing the base control flow graph... "
+//          let baseCfg = constructBaseCfgFromControlFlows programControlFlow
+//          Printf.printfn "done: %u vertices." baseCfg.VertexCount
+//
+//          Printf.printf "building basic blocks... "
+//          // let entryPoint = fst <| Seq.head programControlFlow
+//          let trivialControlFlows, basicBlocks = buildBasicBlocks baseCfg entryPoint
+//          Printf.printfn "done: %u basic blocks, %u trivial basic flows." basicBlocks.Count trivialControlFlows.Count
+//
+//          Printf.printf "removing the trivial flows... "
+//          // for flow in trivialControlFlows do
+//          //   programControlFlow.Remove flow |> ignore
+//          for KeyValue(srcIns, trivialDstInss) in trivialControlFlows do
+//            for dstIns in trivialDstInss do
+//              programControlFlow.[srcIns].Remove dstIns |> ignore
+//          // Printf.printfn "done (%u basic flows rested)" programControlFlow.Count
+//
+//          Printf.printf "constructing the control flow graph..."
+//          let basicBlockCfg = constructBasicBlockCfg basicBlocks programControlFlow
+//          Printf.printfn "done."
+//
+//          let outputFilename =
+//            if Array.length argv > 1 then
+//              argv.[1]
+//            else
+//              System.IO.Path.ChangeExtension(argv.[0], ".dot")
+//          Printf.printfn "write the control flow graph to %s" outputFilename
+//
+//          use disassembler = Gee.External.Capstone.CapstoneDisassembler.CreateX86Disassembler(Gee.External.Capstone.DisassembleMode.Bit64)
+//          disassembler.Syntax <- Gee.External.Capstone.DisassembleSyntaxOptionValue.Intel
+//          ignore <| printBasicBlockCfg basicBlockCfg outputFilename disassembler
+//          // Printf.printfn "done."
+//
+//      Printf.printfn "all done, elapsed time: %u ms" timer.ElapsedMilliseconds
+    traceFileReader.Close()
     1
